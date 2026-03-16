@@ -1,0 +1,10 @@
+.DS_Store
+.env
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+*.db
+*.sqlite3
+*.pyc
+data/

@@ -1,0 +1,95 @@
+Metadata-Version: 2.4
+Name: netvrf
+Version: 0.1.0
+Summary: Foundation skeleton for the NETvRF service.
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: alembic<2.0,>=1.13
+Requires-Dist: fastapi<1.0,>=0.115
+Requires-Dist: pydantic-settings<3.0,>=2.3
+Requires-Dist: psycopg[binary]<4.0,>=3.1
+Requires-Dist: python-dotenv<2.0,>=1.0
+Requires-Dist: redis<6.0,>=5.0
+Requires-Dist: rq<2.0,>=1.16
+Requires-Dist: sqlalchemy<3.0,>=2.0
+Requires-Dist: uvicorn[standard]<1.0,>=0.30
+Provides-Extra: dev
+Requires-Dist: httpx<1.0,>=0.27; extra == "dev"
+Requires-Dist: pytest<9.0,>=8.0; extra == "dev"
+Requires-Dist: ruff<1.0,>=0.6; extra == "dev"
+
+# NETvRF
+
+Foundation skeleton for the NETvRF backend. This stage includes only the FastAPI runtime, `/health`, config/bootstrap, unified error schema, correlation ID middleware, SQLAlchemy/Alembic setup, and local infra helpers.
+
+Providers, matching logic, search, and sync workflows are intentionally not wired yet.
+
+## Stack
+
+- FastAPI
+- Pydantic Settings
+- SQLAlchemy 2.x + Alembic
+- Redis + RQ
+- SQLite WAL for local development
+- PostgreSQL-ready local infra via Docker Compose
+
+## Local run
+
+1. Create a virtualenv and install dependencies:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+```
+
+2. Copy env settings:
+
+```bash
+cp .env.example .env
+mkdir -p data
+```
+
+3. Apply the baseline Alembic revision:
+
+```bash
+alembic upgrade head
+```
+
+4. Start the API locally:
+
+```bash
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+5. Check the service:
+
+```bash
+curl -i http://127.0.0.1:8000/health
+```
+
+## Optional infra via Docker Compose
+
+Start PostgreSQL and Redis when needed:
+
+```bash
+docker compose up -d postgres redis
+```
+
+If you want the API to use PostgreSQL instead of SQLite, update `DATABASE_URL` in `.env` to:
+
+```bash
+postgresql+psycopg://netvrf:netvrf@localhost:5432/netvrf
+```
+
+## Current API
+
+- `GET /health`
+
+## Notes
+
+- All application errors are returned in a single `{"error": ...}` envelope.
+- Every request gets an `X-Correlation-ID` header; incoming values are preserved if provided.
+- Search and sync endpoints use Redis-backed fixed-window IP rate limits. Defaults are `SEARCH_RATE_LIMIT=30` and `SYNC_RATE_LIMIT=5` over `60` seconds, with provider call policy exposed via `PROVIDER_HTTP_TIMEOUT_SECONDS`, `SEARCH_PROVIDER_MAX_ATTEMPTS`, `SEARCH_PROVIDER_RETRY_BACKOFF_SECONDS`, `SYNC_PROVIDER_MAX_ATTEMPTS`, `SYNC_PROVIDER_TIMEOUT_SECONDS`, and `SYNC_PROVIDER_RETRY_BACKOFF_SECONDS`.
+- Provider tokens must come from env or deployment secrets. Do not hardcode them; log redaction masks `Authorization`, `Cookie`, and token-like values.
+- SQLite development mode enables WAL and foreign keys automatically.
