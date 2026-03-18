@@ -164,6 +164,42 @@ button,
   gap: 1rem;
 }
 
+.stats-grid,
+.release-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.stats-grid {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.release-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.stat-card,
+.release-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 251, 245, 0.72);
+  padding: 1rem;
+}
+
+.stat-card {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.stat-card strong {
+  font-size: 1.8rem;
+  line-height: 1;
+}
+
+.release-card h3 {
+  margin: 0;
+}
+
 .platform-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

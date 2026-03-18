@@ -18,6 +18,11 @@ def test_get_artist_detail_returns_platforms_and_aliases(
     assert payload["id"] == ids["artist_id"]
     assert payload["partial"] is False
     assert payload["aliases"][0]["alias"] == "Кровосток"
+    assert payload["releases"][0]["title"] == "Studio Session"
+    assert payload["releases"][0]["track_count"] == 1
+    assert payload["releases"][0]["available_platforms"] == ["youtube"]
+    assert payload["releases"][0]["missing_platforms"] == ["yandex"]
+    assert payload["releases"][0]["is_missing_yandex"] is True
     assert payload["platforms"]["youtube"]["provider_id"] == "yt-artist-1"
     assert payload["platforms"]["yandex"]["explainability"]["decision"] == "auto"
 

@@ -207,6 +207,10 @@ def test_ui_entity_and_job_pages_render(
 
     assert artist_page.status_code == 200
     assert "Platform links" in artist_page.text
+    assert "Albums and releases" in artist_page.text
+    assert "Missing on Yandex" in artist_page.text
+    assert "Studio Session" in artist_page.text
+    assert "no yandex" in artist_page.text
     assert "Enqueue sync" in artist_page.text
 
     assert sync_response.status_code == 303

@@ -26,7 +26,7 @@ def render_search_page(
         "<section class='hero'>",
         "<p class='eyebrow'>NETvRF MVP</p>",
         "<h1>Cross-platform matching without pretending certainty.</h1>",
-        "<p class='lede'>Search cached matches between YouTube Music and Yandex Music, inspect explainability, and sync linked entities on demand.</p>",
+        "<p class='lede'>Search artists, open readable release overviews, and see which releases are still missing on Yandex.</p>",
         "</section>",
         "<section class='panel'>",
         "<form class='search-form' method='get' action='/ui' data-ui-search-form='true'>",
@@ -84,6 +84,8 @@ def render_search_page(
 
 
 def render_artist_page(detail: ArtistDetailResponse) -> str:
+    missing_on_yandex = [release for release in detail.releases if release.is_missing_yandex]
+    album_releases = [release for release in detail.releases if _is_album_release_type(release.release_type)]
     content = [
         _render_entity_header(
             title=detail.display_name,
@@ -92,6 +94,12 @@ def render_artist_page(detail: ArtistDetailResponse) -> str:
             partial=detail.partial,
             missing_platforms=detail.missing_platforms,
         ),
+        _render_artist_stats(
+            release_count=len(detail.releases),
+            album_count=len(album_releases),
+            missing_on_yandex_count=len(missing_on_yandex),
+        ),
+        _render_platforms(detail.platforms),
         "<section class='panel'><h2>Aliases</h2>",
     ]
     if detail.aliases:
@@ -102,9 +110,16 @@ def render_artist_page(detail: ArtistDetailResponse) -> str:
     else:
         content.append("<p class='empty'>No aliases stored.</p>")
     content.append("</section>")
-    content.append(_render_platforms(detail.platforms))
-    content.append("<section class='panel'><h2>Related releases</h2>")
-    content.append(_render_release_links(detail.releases))
+    content.append("<section class='panel'><h2>Albums and releases</h2>")
+    content.append(_render_release_cards(detail.releases, empty_message="No releases linked."))
+    content.append("</section>")
+    content.append("<section class='panel'><h2>Missing on Yandex</h2>")
+    content.append(
+        _render_release_cards(
+            missing_on_yandex,
+            empty_message="All linked releases already have a Yandex match.",
+        )
+    )
     content.append("</section>")
     content.append("<section class='panel'><h2>Related tracks</h2>")
     content.append(_render_track_links(detail.tracks))
@@ -209,7 +224,7 @@ def _render_search_item(item: SearchResultItemPayload) -> str:
         "</div>",
     ]
     if href:
-        body.append(f"<p><a href='{href}'>Open canonical entity #{item.canonical_id}</a></p>")
+        body.append(f"<p><a href='{href}'>{escape(_search_item_link_label(item))}</a></p>")
     else:
         body.append("<p class='empty'>No canonical entity was created for this result.</p>")
     body.append("<div class='platform-grid'>")
@@ -245,6 +260,27 @@ def _render_platforms(platforms: dict[str, Optional[LinkedPlatformEntityPayload]
         body.append(_render_platform_card(platforms.get(provider_name), provider_name))
     body.append("</div></section>")
     return "".join(body)
+
+
+def _render_artist_stats(*, release_count: int, album_count: int, missing_on_yandex_count: int) -> str:
+    return "".join(
+        [
+            "<section class='panel'><div class='stats-grid'>",
+            _render_stat_card(str(release_count), "linked releases"),
+            _render_stat_card(str(album_count), "albums"),
+            _render_stat_card(str(missing_on_yandex_count), "missing on Yandex"),
+            "</div></section>",
+        ]
+    )
+
+
+def _render_stat_card(value: str, label: str) -> str:
+    return (
+        "<article class='stat-card'>"
+        f"<strong>{escape(value)}</strong>"
+        f"<span class='muted'>{escape(label)}</span>"
+        "</article>"
+    )
 
 
 def _render_platform_card(
@@ -310,6 +346,52 @@ def _render_release_links(releases) -> str:
     return "".join(body)
 
 
+def _render_release_cards(releases, *, empty_message: str) -> str:
+    if not releases:
+        return f"<p class='empty'>{escape(empty_message)}</p>"
+
+    body = ["<div class='release-grid'>"]
+    for release in releases:
+        body.append(_render_release_card(release))
+    body.append("</div>")
+    return "".join(body)
+
+
+def _render_release_card(release) -> str:
+    subtitle = []
+    if release.release_year is not None:
+        subtitle.append(str(release.release_year))
+    if release.release_type:
+        subtitle.append(release.release_type)
+    if release.track_count is not None:
+        track_label = "track" if release.track_count == 1 else "tracks"
+        subtitle.append(f"{release.track_count} {track_label}")
+    if release.role:
+        subtitle.append(release.role)
+
+    availability_badges = [
+        _badge(platform_name, "fresh")
+        for platform_name in release.available_platforms
+    ]
+    availability_badges.extend(
+        _badge(f"no {platform_name}", "partial")
+        for platform_name in release.missing_platforms
+    )
+
+    return "".join(
+        [
+            "<article class='release-card'>",
+            "<div class='row between wrap'>",
+            f"<h3><a href='/ui/releases/{release.release_id}'>{escape(release.title)}</a></h3>",
+            f"<div class='row wrap'>{''.join(availability_badges)}</div>",
+            "</div>",
+            f"<p class='muted'>{escape(' · '.join(subtitle) if subtitle else 'Release')}</p>",
+            f"<p><a href='/ui/releases/{release.release_id}'>Open release page</a></p>",
+            "</article>",
+        ]
+    )
+
+
 def _render_track_links(tracks) -> str:
     if not tracks:
         return "<p class='empty'>No tracks linked.</p>"
@@ -342,6 +424,22 @@ def _option(value: str, label: str, selected: Optional[str]) -> str:
 def _badge(label: str, tone: str) -> str:
     safe_tone = escape(tone.replace("_", "-"))
     return f"<span class='badge badge-{safe_tone}'>{escape(label)}</span>"
+
+
+def _search_item_link_label(item: SearchResultItemPayload) -> str:
+    if item.kind == "artist":
+        return "Open artist overview"
+    if item.kind == "release":
+        return "Open release page"
+    if item.kind == "track":
+        return "Open track page"
+    return f"Open canonical entity #{item.canonical_id}"
+
+
+def _is_album_release_type(release_type: Optional[str]) -> bool:
+    if release_type is None:
+        return False
+    return release_type in {"album", "lp", "ep"}
 
 
 def _render_layout(

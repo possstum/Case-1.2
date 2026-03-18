@@ -50,8 +50,12 @@ class RelatedReleasePayload(BaseModel):
     title: str
     release_type: Optional[str] = None
     release_year: Optional[int] = None
+    track_count: Optional[int] = None
     role: Optional[str] = None
     position: int
+    available_platforms: list[str] = Field(default_factory=list)
+    missing_platforms: list[str] = Field(default_factory=list)
+    is_missing_yandex: bool = False
     disc_number: Optional[int] = None
     track_number: Optional[int] = None
 

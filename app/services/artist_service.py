@@ -14,7 +14,7 @@ from app.api.schemas.entities import (
     RelatedTrackPayload,
 )
 from app.core.errors import NotFoundError
-from app.db.models import Artist, LinkArtist, ReleaseArtist, TrackArtist
+from app.db.models import Artist, LinkArtist, LinkRelease, Release, ReleaseArtist, TrackArtist
 from app.providers import ProviderName
 
 
@@ -50,8 +50,12 @@ class ArtistService:
                     title=credit.release.title,
                     release_type=credit.release.release_type,
                     release_year=credit.release.release_year,
+                    track_count=len(credit.release.tracks),
                     role=credit.role,
                     position=credit.position,
+                    available_platforms=self._release_available_platforms(credit.release.platform_links),
+                    missing_platforms=self._release_missing_platforms(credit.release.platform_links),
+                    is_missing_yandex=self._release_is_missing_yandex(credit.release.platform_links),
                 )
                 for credit in sorted(
                     artist.release_credits,
@@ -79,7 +83,13 @@ class ArtistService:
             select(Artist)
             .options(
                 selectinload(Artist.aliases),
-                selectinload(Artist.release_credits).selectinload(ReleaseArtist.release),
+                selectinload(Artist.release_credits)
+                .selectinload(ReleaseArtist.release)
+                .selectinload(Release.tracks),
+                selectinload(Artist.release_credits)
+                .selectinload(ReleaseArtist.release)
+                .selectinload(Release.platform_links)
+                .selectinload(LinkRelease.platform_release),
                 selectinload(Artist.track_credits).selectinload(TrackArtist.track),
                 selectinload(Artist.platform_links).selectinload(LinkArtist.platform_artist),
             )
@@ -114,6 +124,20 @@ class ArtistService:
                 ),
             )
         return platforms
+
+    def _release_available_platforms(self, platform_links: list[LinkRelease]) -> list[str]:
+        return sorted({link.platform_release.platform for link in platform_links})
+
+    def _release_missing_platforms(self, platform_links: list[LinkRelease]) -> list[str]:
+        available_platforms = set(self._release_available_platforms(platform_links))
+        supported_platforms = {
+            ProviderName.YOUTUBE.value,
+            ProviderName.YANDEX.value,
+        }
+        return sorted(supported_platforms - available_platforms)
+
+    def _release_is_missing_yandex(self, platform_links: list[LinkRelease]) -> bool:
+        return ProviderName.YANDEX.value in self._release_missing_platforms(platform_links)
 
     def _coerce_aware(self, value: datetime | None) -> datetime | None:
         if value is None or value.tzinfo is not None:
