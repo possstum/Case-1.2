@@ -29,7 +29,7 @@ def render_search_page(
         "<p class='lede'>Search cached matches between YouTube Music and Yandex Music, inspect explainability, and sync linked entities on demand.</p>",
         "</section>",
         "<section class='panel'>",
-        "<form class='search-form' method='get' action='/ui'>",
+        "<form class='search-form' method='get' action='/ui' data-ui-search-form='true'>",
         f"<label><span>Query</span><input type='text' name='q' value='{escape(query)}' placeholder='Krovostok' required></label>",
         "<label><span>Kind</span><select name='kind'>",
         _option("", "Any", kind),

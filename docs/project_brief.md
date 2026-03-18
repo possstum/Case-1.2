@@ -1,6 +1,6 @@
 # Project Brief: НЕТвРФ
 
-Короткая заметка: этот brief описывает текущее состояние репозитория по фактическому коду и verified docs baseline на `2026-03-16`. При конфликте между brief, README и runtime поведением приоритет у того, что реально подключено в `app/main.py` и зафиксировано в `docs/artifacts/runtime_verification.md`.
+Короткая заметка: этот brief описывает текущую branch-state репозитория после Yandex catalog expansion по фактическому коду и latest verification snapshot на `2026-03-19`. При конфликте между runtime, brief и README приоритет у того, что реально подключено в `app/main.py`, затем у этого brief, затем у high-level runbook в `README.md`.
 
 ## 1. Краткое назначение проекта и что считается MVP сейчас
 
@@ -9,6 +9,10 @@
 ### Назначение
 
 Проект предназначен для поиска и сопоставления музыкальных сущностей между YouTube Music и Yandex Music, с canonical-слоем, explainability и фоновыми sync jobs.
+
+### Текущая стадия проекта
+
+По состоянию на `2026-03-19` текущая стадия проекта формулируется как `expanded MVP with active integration and stabilization`. Этот label означает, что проект уже заметно шире health-only scaffold: API и web UI смонтированы, detail/search/sync flows реализованы, а Yandex catalog expansion уже подключен в ветке. При этом это еще не production-ready label, потому что live-provider readiness остается частично непроверенной, хотя локальный verification baseline этой ветки уже снова зеленый.
 
 ### Текущий MVP
 
@@ -21,21 +25,22 @@
 - JSON logging с redaction
 - SQLite WAL dev mode
 - staging-like host-run baseline against PostgreSQL + Redis
+- Yandex catalog ingestion and segmented provider-side storage
 
-### Что входит в verified demo baseline
+### Что входит в verified baseline
 
 - `GET /health` success path
 - mounted-route presence for API surface above
-- no-provider and rate-limited behavior for `/search`
+- rate-limited behavior for `/search`
 - `404 not_found` behavior for missing detail IDs
-- `/ui` availability, включая provider-disabled notice path
-- staging-like `/health` success with PostgreSQL + Redis and blank provider tokens
+- `/ui` availability, включая empty-results state и provider-disabled fallback when the effective provider registry is empty
+- staging-like `/health`, `/search`, and `/ui` success with PostgreSQL + Redis and blank provider tokens under the current default wiring
 
-### Что не входит в verified demo baseline
+### Что не входит в verified baseline
 
 - live provider search behavior with real `YOUTUBE_MUSIC_TOKEN` / `YANDEX_MUSIC_TOKEN`
-- provider refresh methods `get_artist`, `get_release`, `get_track`
-- успешный end-to-end live refresh через worker и real provider HTTP
+- fully verified live refresh behavior through worker and provider HTTP
+- fully verified YouTube detail refresh behavior via `get_artist`, `get_release`, and `get_track`
 - любые claims о production readiness beyond the verified local and staging-like baseline
 
 ## 2. Актуальное дерево репозитория по подсистемам
@@ -53,7 +58,7 @@ app/
   core/                    config, logging, middleware, exception handling
   db/                      SQLAlchemy models, repositories, session/bootstrap helpers
   providers/               provider contracts, registry, HTTP clients, payload schemas, mappers
-  services/                health, search, detail, link, matching, sync services
+  services/                health, search, detail, link, matching, sync, and Yandex catalog ingestion services
   tasks/                   RQ queue helpers, worker entrypoint, sync job runner, search refresh stub
   web/                     HTML routes, renderers, static assets
 scripts/
@@ -95,20 +100,20 @@ data/
 
 Статус: audited against current code and verified docs baseline.
 
-| Method | Path | Handler | Verified demo note | Статус |
+| Method | Path | Handler | Verified baseline note | Статус |
 | --- | --- | --- | --- | --- |
 | GET | `/health` | `app.api.routes.health.get_health` | `200` success path verified locally and in staging-like mode | live / verified |
-| GET | `/search` | `app.api.routes.search.search` | mounted; verified degraded no-provider behavior and rate limiting; live provider success not verified | live / partial verification |
-| GET | `/artists/{artist_id}` | `app.api.routes.artists.get_artist` | mounted; missing-ID `404` verified; `200` requires existing canonical row | live / partial verification |
-| GET | `/releases/{release_id}` | `app.api.routes.releases.get_release` | mounted; missing-ID `404` verified; `200` requires existing canonical row | live / partial verification |
-| GET | `/tracks/{track_id}` | `app.api.routes.tracks.get_track` | mounted; missing-ID `404` verified; `200` requires existing canonical row | live / partial verification |
+| GET | `/search` | `app.api.routes.search.search` | mounted; rate limiting is verified; cold-miss `503` remains supported when the effective provider registry is empty, but current branch wiring usually searches Yandex even with blank `YANDEX_MUSIC_TOKEN` | live / partial verification |
+| GET | `/artists/{artist_id}` | `app.api.routes.artists.get_artist` | mounted; missing-ID `404` verified; `200` success path requires existing canonical rows | live / partial verification |
+| GET | `/releases/{release_id}` | `app.api.routes.releases.get_release` | mounted; missing-ID `404` verified; `200` success path requires existing canonical rows | live / partial verification |
+| GET | `/tracks/{track_id}` | `app.api.routes.tracks.get_track` | mounted; missing-ID `404` verified; `200` success path requires existing canonical rows | live / partial verification |
 | POST | `/sync/{kind}/{target_id}` | `app.api.routes.sync.enqueue_sync` | mounted; `429` path verified; `202` supported when target exists and queueing succeeds; no live refresh claims | live / partial verification |
 | GET | `/jobs/{job_id}` | `app.api.routes.jobs.get_job` | mounted; `200` for existing jobs and `404` for unknown IDs are part of supported behavior | live |
 | GET | `/` | `app.web.routes.root_redirect` | redirects to `/ui` | live |
-| GET | `/ui` | `app.web.routes.ui_search` | landing page works; provider-disabled notice is acceptable baseline | live / partial verification |
-| GET | `/ui/artists/{artist_id}` | `app.web.routes.ui_artist` | requires existing canonical row | live |
-| GET | `/ui/releases/{release_id}` | `app.web.routes.ui_release` | requires existing canonical row | live |
-| GET | `/ui/tracks/{track_id}` | `app.web.routes.ui_track` | requires existing canonical row | live |
+| GET | `/ui` | `app.web.routes.ui_search` | landing page works; cold misses may render either a provider-disabled notice or a normal empty-results page depending on the effective provider registry | live / partial verification |
+| GET | `/ui/artists/{artist_id}` | `app.web.routes.ui_artist` | renders existing canonical artist detail rows | live |
+| GET | `/ui/releases/{release_id}` | `app.web.routes.ui_release` | renders existing canonical release detail rows | live |
+| GET | `/ui/tracks/{track_id}` | `app.web.routes.ui_track` | renders existing canonical track detail rows | live |
 | POST | `/ui/sync/{kind}/{target_id}` | `app.web.routes.ui_sync` | redirects to `/ui/jobs/{job_id}` when enqueue succeeds | live / partial verification |
 | GET | `/ui/jobs/{job_id}` | `app.web.routes.ui_job` | renders stored sync job status | live |
 
@@ -144,26 +149,27 @@ data/
 | Сервис | Что делает | Runtime role today | Ограничения | Статус |
 | --- | --- | --- | --- | --- |
 | `HealthService` | проверка app/database/redis | live `/health` | зависит от configured DB/Redis | fully implemented |
-| `ArtistService` | artist detail with aliases, credits, platform links | live detail routes | success path требует existing canonical data | implemented |
-| `ReleaseService` | release detail with artists/tracks/platforms | live detail routes | success path требует existing canonical data | implemented |
-| `TrackService` | track detail with artists/releases/platforms | live detail routes | success path требует existing canonical data | implemented |
+| `ArtistService` | artist detail with aliases, credits, platform links | live detail routes | success path requires existing canonical data | implemented |
+| `ReleaseService` | release detail with artists/tracks/platforms | live detail routes | success path requires existing canonical data | implemented |
+| `TrackService` | track detail with artists/releases/platforms | live detail routes | success path requires existing canonical data | implemented |
 | `LinkService` | persist canonical/platform/link rows | used by search and sync flows | relies on provider/entity inputs | implemented |
 | `MatchingService` | matching and explainability scoring | used by search flow | live provider quality not verified | implemented |
-| `SearchService` | cache-first search, provider fan-out, stale handling | live `/search` | no-provider degraded path verified; live provider results not verified | implemented / partially verified |
+| `SearchService` | cache-first search, provider fan-out, stale handling | live `/search` and cache-backed `/ui` | no-provider degraded path verified; live provider results not fully verified | implemented / partially verified |
 | `SyncService` | enqueue jobs, read job state, execute refresh | live `/sync` and `/jobs`; worker execution path exists | live provider refresh success not verified | implemented / partially verified |
+| `YandexCatalogIngestionService` | ingests Yandex artist/release/track graphs and segmented provider catalog lists | used by Yandex-linked sync execution | live provider HTTP and end-to-end sync readiness are still only partially verified | implemented / partially verified |
 
 ## 8. Таблица provider layer
 
 Статус: audited against current code.
 
-| Интерфейс / компонент | Реальные реализации | Verified demo note | Статус |
+| Интерфейс / компонент | Реальные реализации | Verified baseline note | Статус |
 | --- | --- | --- | --- |
 | `MusicProvider` contract | `app.providers.base.MusicProvider` | contract and test doubles are in place | fully implemented contract |
 | `ProviderRegistry` | `app.providers.registry.ProviderRegistry` | runtime lookup/iteration works | fully implemented |
-| `YouTubeMusicClient.search()` | concrete HTTP search client | code exists, but live-token behavior is not verified for demo claims | partial / unverified live behavior |
-| `YandexMusicClient.search()` | concrete HTTP search client | code exists, but live-token behavior is not verified for demo claims | partial / unverified live behavior |
-| `YouTubeMusicClient.get_*()` | concrete methods present | all detail refresh methods raise `NotImplementedError` | stub |
-| `YandexMusicClient.get_*()` | concrete methods present | all detail refresh methods raise `NotImplementedError` | stub |
+| `YouTubeMusicClient.search()` | concrete HTTP search client | code exists, but live-token behavior is not verified for baseline claims | partial / unverified live behavior |
+| `YandexMusicClient.search()` | concrete HTTP search client | code exists, but live-token behavior is not verified for baseline claims | partial / unverified live behavior |
+| `YouTubeMusicClient.get_*()` | concrete methods present | all detail refresh methods still raise `NotImplementedError` | stub |
+| `YandexMusicClient.get_*()` | concrete detail fetch methods | used by Yandex catalog ingestion and sync refresh wiring; live behavior is still only partially verified | implemented / partially verified live behavior |
 | YouTube mapper layer | `map_artist`, `map_release`, `map_track` | mapper layer is implemented and tested | implemented |
 | Yandex mapper layer | `map_artist`, `map_release`, `map_track` | mapper layer is implemented and tested | implemented |
 
@@ -177,8 +183,9 @@ data/
 2. Request goes through Redis-backed search rate limiting.
 3. `SearchService.search()` checks `search_cache` first.
 4. Fresh or stale cache hits return `200` even when providers are unavailable.
-5. Cold miss or expired cache without configured providers returns `503 search_providers_unavailable`.
-6. When providers are configured, code fans out across provider clients and persists merged results, but that live-provider success path is not part of the verified demo baseline.
+5. Cold miss or expired cache returns `503 search_providers_unavailable` only when the effective provider registry is empty.
+6. In the current branch default wiring, public Yandex search keeps one usable provider available even when `YANDEX_MUSIC_TOKEN` is blank, so a cold miss may return a normal `200` search page with empty results instead of a provider-disabled fallback.
+7. When providers are configured, code fans out across provider clients and persists merged results, but that live-provider success path is not part of the fully verified baseline.
 
 ### Detail Flow
 
@@ -200,7 +207,7 @@ data/
 1. `GET /jobs/{job_id}` returns stored sync job state.
 2. Existing jobs may be `queued`, `running`, `finished`, or `failed`.
 3. Unknown IDs return `404 not_found`.
-4. Worker execution exists, but successful live provider refresh is not a verified demo claim because provider `get_*()` methods remain stubbed.
+4. Worker execution exists, but successful live provider refresh is not a verified baseline claim because only parts of provider refresh have been exercised end-to-end and YouTube detail refresh still remains stubbed.
 
 ## 10. Что реально делает queue / worker
 
@@ -225,7 +232,7 @@ data/
 | database | `DATABASE_URL`, `SQL_ECHO` | SQLite dev or PostgreSQL staging-like | dev default is SQLite WAL |
 | redis/rq | `REDIS_URL`, `RQ_DEFAULT_QUEUE`, `HEALTH_REQUIRE_REDIS` | rate limits, queueing, health | staging-like baseline sets Redis required |
 | matching/search/sync policy | `MATCH_*`, `SEARCH_*`, `SYNC_*`, `PROVIDER_HTTP_TIMEOUT_SECONDS` | search, sync, retry, cache behavior | all declared in `Settings` |
-| provider tokens | `YOUTUBE_MUSIC_TOKEN`, `YANDEX_MUSIC_TOKEN` | optional live provider fan-out | blank tokens intentionally produce degraded behavior in the verified baseline |
+| provider tokens | `YOUTUBE_MUSIC_TOKEN`, `YANDEX_MUSIC_TOKEN` | optional live provider fan-out | YouTube requires a token; current branch Yandex public search may still work with a blank token, but blank tokens still reduce verified live behavior |
 
 ## 12. Как поднять проект локально
 
@@ -252,14 +259,14 @@ data/
 
 ### Важные caveats
 
-- blank provider tokens are an expected baseline for degraded demo behavior
-- `/search` returning `503 search_providers_unavailable` on cold miss is expected in that mode
-- detail and sync success paths depend on existing canonical rows or known IDs
-- live provider execution is not part of the supported demo story
+- blank provider tokens no longer imply an empty provider registry in the current branch default wiring
+- `/search` may still return `200` from public Yandex search in that mode; `503 search_providers_unavailable` is expected only when the effective provider registry is empty
+- detail success paths depend on existing canonical rows
+- live provider execution is not part of the supported baseline story
 
 ## 13. Какие тесты есть и что они реально покрывают
 
-Статус: aligned to the verified local baseline recorded in `docs/artifacts/runtime_verification.md`.
+Статус: aligned to the current branch verification snapshot and older runtime verification artifacts.
 
 | Test suite or file | Что реально покрывает | Current note |
 | --- | --- | --- |
@@ -267,14 +274,17 @@ data/
 | `tests/api/test_search.py` | cache, degraded no-provider behavior, rate limits, retries | part of the passing local baseline |
 | `tests/api/test_entities.py` | detail response shape and missing-ID `404` | part of the passing local baseline |
 | `tests/api/test_sync_jobs.py` | sync enqueue and job status API behavior | part of the passing local baseline |
-| `tests/api/test_web_ui.py` | `/`, `/ui`, entity/job pages, provider-disabled notice | part of the passing local baseline |
+| `tests/api/test_web_ui.py` | `/`, `/ui`, notice fallback, entity/job pages, and empty-kind normalization expectations | part of the passing local baseline |
 | `tests/services/*` | matching and sync service behavior | part of the passing local baseline |
 | `tests/providers/*` | provider contracts and mappers | part of the passing local baseline |
 | `tests/db/*`, `tests/core/*`, `tests/utils/*` | DB, logging, normalization, helpers | part of the passing local baseline |
 
-Verified local CI-aligned results on `2026-03-16`:
-`.venv/bin/pytest -q tests/api` passed with `24 passed` and already includes `tests/api/test_web_ui.py`,
-and `.venv/bin/pytest -q tests/services tests/providers tests/db tests/utils tests/core` passed with `28 passed`.
+Current local verification snapshot on `2026-03-19`:
+
+- `.venv/bin/python -m ruff check .` passed
+- `.venv/bin/python -m pytest -q tests/api` passed with `31 passed`
+- `.venv/bin/python -m pytest -q tests/services tests/providers tests/db tests/utils tests/core` passed with `42 passed`
+- `.venv/bin/python -m pytest -q` passed with `73 passed`
 
 ## 14. Статус реализации
 
@@ -288,18 +298,19 @@ and `.venv/bin/pytest -q tests/services tests/providers tests/db tests/utils tes
 - DB/bootstrap/config/rate-limit dependency factories
 - SQLAlchemy models, repositories, and detail services
 - Redis queue helper and worker launcher
+- Yandex catalog ingestion and segmented provider storage wiring
 
-### Partially Verified For Demo
+### Partially Verified For Baseline
 
 - `SearchService` live provider fan-out path
 - `SyncService.execute()` live provider refresh path
 - web UI success paths that require pre-existing canonical data
 - queue-backed sync execution beyond enqueue/job-status semantics
+- Yandex live provider behavior beyond the current branch snapshot
 
 ### Stub / Placeholder
 
 - provider detail refresh methods `YouTubeMusicClient.get_*()`
-- provider detail refresh methods `YandexMusicClient.get_*()`
 - `app/tasks/search_jobs.refresh_search_cache`
 
 ## 15. Что реально подключено в runtime versus что пока ограничено baseline
@@ -309,14 +320,14 @@ and `.venv/bin/pytest -q tests/services tests/providers tests/db tests/utils tes
 | Компонент | Подключен в runtime | Ограничение baseline |
 | --- | --- | --- |
 | Health API | да | verified success path |
-| Search API | да | verified degraded/no-provider path; live provider success unverified |
+| Search API | да | rate limiting is verified; `503 search_providers_unavailable` now depends on an effectively empty provider registry, while default branch wiring usually still has Yandex search |
 | Entity detail API | да | success path requires existing canonical data |
 | Sync API | да | enqueue/status supported; live provider refresh unverified |
 | Jobs API | да | depends on existing jobs |
-| Web UI | да | provider-disabled notice is acceptable baseline |
-| Worker process | отдельно запускается | not required for the docs-only demo baseline |
+| Web UI | да | empty-results HTML is current branch baseline; provider-disabled notice is only a fallback when the effective provider registry is empty |
+| Worker process | отдельно запускается | not required for the docs-only baseline |
 | Search refresh job | code path exists | worker implementation remains stubbed |
-| Live provider refresh | limited | `get_*()` methods remain unimplemented |
+| Live provider refresh | limited | YouTube `get_*()` remains unimplemented, and broader end-to-end live refresh is still not fully verified |
 
 ## 16. Расхождения между старой документацией и текущим кодом
 
@@ -324,5 +335,5 @@ and `.venv/bin/pytest -q tests/services tests/providers tests/db tests/utils tes
 
 - Старый README описывал репозиторий как foundation skeleton с одним `/health`; это больше не соответствует текущему runtime wiring.
 - Старый brief описывал search/detail/sync/jobs/web как dormant or not wired; сейчас они реально смонтированы.
-- Current demo story is now standardized around verified local and staging-like behavior, including acceptable degraded states.
+- Current baseline story is now standardized around verified local and staging-like behavior, including acceptable degraded states.
 - Документация больше не обещает live provider behavior, который не был отдельно подтвержден.

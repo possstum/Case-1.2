@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import RateLimitExceededError, ServiceUnavailableError
 from app.core.config import Settings, get_settings
 from app.db.session import get_engine, get_redis_client, get_session_factory
-from app.providers import ProviderRegistry
+from app.providers import ProviderName, ProviderRegistry
 from app.providers.youtube_music.client import YouTubeMusicClient
 from app.providers.yandex_music.client import YandexMusicClient
 from app.services.artist_service import ArtistService
@@ -22,6 +22,7 @@ from app.services.matching_service import MatchingService
 from app.services.health_service import HealthService
 from app.services.search_service import SearchRefreshScheduler, SearchService
 from app.services.sync_service import SyncJobScheduler, SyncService
+from app.services.yandex_catalog_service import YandexCatalogIngestionService
 from app.tasks.queue import RQSyncJobScheduler
 from app.utils.rate_limit import FixedWindowRateLimiter
 
@@ -80,13 +81,12 @@ def get_optional_provider_registry(
                 timeout_seconds=settings.provider_http_timeout_seconds,
             )
         )
-    if settings.yandex_music_token:
-        providers.append(
-            YandexMusicClient(
-                token=settings.yandex_music_token,
-                timeout_seconds=settings.provider_http_timeout_seconds,
-            )
+    providers.append(
+        YandexMusicClient(
+            token=settings.yandex_music_token,
+            timeout_seconds=settings.provider_http_timeout_seconds,
         )
+    )
     if not providers:
         return None
     return ProviderRegistry(tuple(providers))
@@ -155,13 +155,11 @@ def get_web_search_service(
     settings: Settings = Depends(get_app_settings),
     provider_registry: Optional[ProviderRegistry] = Depends(get_optional_provider_registry),
     refresh_scheduler: SearchRefreshScheduler = Depends(get_search_refresh_scheduler),
-) -> Optional[SearchService]:
-    if provider_registry is None:
-        return None
+) -> SearchService:
     return _build_search_service(
         session=session,
         settings=settings,
-        provider_registry=provider_registry,
+        provider_registry=provider_registry if provider_registry is not None else ProviderRegistry(()),
         refresh_scheduler=refresh_scheduler,
     )
 
@@ -177,13 +175,12 @@ def get_sync_provider_registry(
                 timeout_seconds=settings.provider_http_timeout_seconds,
             )
         )
-    if settings.yandex_music_token:
-        providers.append(
-            YandexMusicClient(
-                token=settings.yandex_music_token,
-                timeout_seconds=settings.provider_http_timeout_seconds,
-            )
+    providers.append(
+        YandexMusicClient(
+            token=settings.yandex_music_token,
+            timeout_seconds=settings.provider_http_timeout_seconds,
         )
+    )
     return ProviderRegistry(tuple(providers))
 
 
@@ -267,13 +264,23 @@ def get_sync_service(
     provider_registry: ProviderRegistry = Depends(get_sync_provider_registry),
     job_scheduler: SyncJobScheduler = Depends(get_sync_job_scheduler),
 ) -> SyncService:
+    link_service = LinkService(session)
+    yandex_provider = provider_registry.get(ProviderName.YANDEX.value)
+    yandex_catalog_ingestion_service = None
+    if yandex_provider is not None:
+        yandex_catalog_ingestion_service = YandexCatalogIngestionService(
+            session=session,
+            provider=yandex_provider,
+            link_service=link_service,
+        )
     return SyncService(
         session=session,
         settings=settings,
         provider_registry=provider_registry,
-        link_service=LinkService(session),
+        link_service=link_service,
         artist_service=ArtistService(session),
         release_service=ReleaseService(session),
         track_service=TrackService(session),
+        yandex_catalog_ingestion_service=yandex_catalog_ingestion_service,
         job_scheduler=job_scheduler,
     )

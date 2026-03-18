@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -14,6 +14,7 @@ from app.api.deps import (
     get_sync_service,
     get_track_service,
 )
+from app.core.errors import ServiceUnavailableError
 from app.services.artist_service import ArtistService
 from app.services.release_service import ReleaseService
 from app.services.search_service import SearchService
@@ -28,6 +29,7 @@ from app.web.render import (
 )
 
 web_router = APIRouter(include_in_schema=False)
+UiSearchKind = Literal["", "artist", "release", "track"]
 
 
 @web_router.get("/", response_class=RedirectResponse)
@@ -38,21 +40,22 @@ def root_redirect() -> RedirectResponse:
 @web_router.get("/ui", response_class=HTMLResponse, dependencies=[Depends(enforce_search_rate_limit)])
 def ui_search(
     q: Optional[str] = Query(default=None, min_length=1),
-    kind: Optional[str] = Query(default=None, pattern="^(artist|release|track)$"),
+    kind: Optional[UiSearchKind] = Query(default=None),
     limit: Optional[int] = Query(default=None, ge=1),
-    search_service: Optional[SearchService] = Depends(get_web_search_service),
+    search_service: SearchService = Depends(get_web_search_service),
 ) -> HTMLResponse:
     response = None
     notice = None
+    normalized_kind = kind or None
     if q:
-        if search_service is None:
+        try:
+            response = search_service.search(query=q, kind=normalized_kind, limit=limit)
+        except ServiceUnavailableError:
             notice = "Search providers are not configured. The UI is available, but live search is disabled."
-        else:
-            response = search_service.search(query=q, kind=kind, limit=limit)
     return HTMLResponse(
         render_search_page(
             query=q or "",
-            kind=kind,
+            kind=normalized_kind,
             limit=limit,
             response=response,
             notice=notice,

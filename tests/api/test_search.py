@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
-from app.core.config import clear_settings_cache
+from app.core.config import Settings, clear_settings_cache
 from app.api.deps import (
     get_health_service,
     get_optional_provider_registry,
@@ -450,6 +450,23 @@ def test_search_returns_503_when_no_providers_and_cache_is_expired(
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "search_providers_unavailable"
+
+
+def test_optional_provider_registry_includes_public_yandex_without_token(
+    sqlite_database_url: str,
+    migrated_sqlite_database,
+) -> None:
+    clear_settings_cache()
+
+    provider_registry = get_optional_provider_registry(
+        settings=Settings(
+            YOUTUBE_MUSIC_TOKEN=None,
+            YANDEX_MUSIC_TOKEN=None,
+        )
+    )
+
+    assert provider_registry is not None
+    assert [provider.provider_name.value for provider in provider_registry.all()] == ["yandex"]
 
 
 def test_search_rate_limit_returns_429(
