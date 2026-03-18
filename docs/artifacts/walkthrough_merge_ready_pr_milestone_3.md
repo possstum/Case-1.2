@@ -36,13 +36,19 @@ Verify the narrowed PR branch, capture the exact passing baseline, and package t
 .venv/bin/python -m pytest -q tests/services tests/providers tests/db tests/utils tests/core
 ```
 
+```bash
+git add .
+git commit -m "Add Yandex catalog ingest storage and sync wiring"
+```
+
 ## Tests Run
 
 - `.venv/bin/ruff check .` -> `All checks passed!`
 - `.venv/bin/pytest -q` -> `73 passed in 3.84s`
 - `.venv/bin/python -m pytest -q tests/api` -> `31 passed in 3.27s`
 - `.venv/bin/python -m pytest -q tests/services tests/providers tests/db tests/utils tests/core` -> `42 passed in 2.08s`
+- `git commit -m "Add Yandex catalog ingest storage and sync wiring"` -> created commit `12398b6`
 
 ## Result
 
-The branch is now narrowed to the intended Yandex catalog ingest review unit, locally green, and packaged with PR and post-merge verification artifacts.
+The branch is now narrowed to the intended Yandex catalog ingest review unit, locally green, and packaged as commit `12398b6` with PR and post-merge verification artifacts.
