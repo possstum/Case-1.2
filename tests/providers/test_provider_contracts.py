@@ -27,7 +27,7 @@ class StubProvider(MusicProvider):
         self,
         query: str,
         *,
-        limit: int,
+        limit: int | None,
         kind: ProviderEntityKind | None = None,
     ) -> ProviderSearchResult:
         return ProviderSearchResult(

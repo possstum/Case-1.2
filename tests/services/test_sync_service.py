@@ -26,7 +26,7 @@ class FlakyArtistProvider(MusicProvider):
         self.fail_count = fail_count
         self.calls = 0
 
-    def search(self, query: str, *, limit: int, kind: ProviderEntityKind | None = None):
+    def search(self, query: str, *, limit: int | None, kind: ProviderEntityKind | None = None):
         raise NotImplementedError
 
     def get_artist(self, provider_id: str) -> ProviderArtist:
@@ -179,6 +179,56 @@ def test_sync_service_marks_failed_when_all_providers_fail(
     assert stored_job.status == "failed"
 
 
+def test_sync_service_finishes_partial_when_youtube_fails_and_yandex_catalog_ingest_succeeds(
+    sqlite_database_url: str,
+    migrated_sqlite_database,
+    db_session,
+) -> None:
+    ids = seed_catalog(db_session)
+    repository = SyncJobRepository(db_session)
+    sync_job = repository.create(
+        kind="artist",
+        target_id=str(ids["artist_id"]),
+        queue_name="default",
+        payload_json={"kind": "artist", "target_id": str(ids["artist_id"])},
+    )
+    db_session.commit()
+
+    yandex_ingestion = RecordingYandexCatalogIngestionService()
+    service = build_sync_service(
+        db_session,
+        ProviderRegistry(
+            (
+                StubProvider(
+                    provider_name=ProviderName.YOUTUBE,
+                    get_error=NotImplementedError("YouTube Music provider integration is not implemented yet"),
+                ),
+                StubProvider(
+                    provider_name=ProviderName.YANDEX,
+                    get_error=AssertionError("yandex provider get_* should not be called during catalog ingest"),
+                ),
+            )
+        ),
+        yandex_catalog_ingestion_service=yandex_ingestion,
+    )
+
+    response = service.execute(sync_job.id)
+
+    assert response.status == "finished"
+    assert response.result_json["updated_count"] == 1
+    assert response.result_json["partial"] is True
+    assert yandex_ingestion.artist_calls == ["ya-artist-1"]
+
+    provider_results = {
+        provider_result["provider"]: provider_result
+        for provider_result in response.result_json["providers"]
+    }
+    assert provider_results["youtube"]["status"] == "failed"
+    assert provider_results["yandex"]["status"] == "updated"
+    assert provider_results["yandex"]["mode"] == "catalog_ingest"
+    assert provider_results["yandex"]["catalog_list_count"] == 4
+
+
 def test_sync_service_applies_retry_backoff_between_attempts(
     sqlite_database_url: str,
     migrated_sqlite_database,
@@ -282,13 +332,16 @@ def test_sync_service_uses_yandex_catalog_ingestion_for_artist_links(
 
     assert response.status == "finished"
     assert response.result_json["updated_count"] == 2
+    assert response.result_json["partial"] is False
     assert yandex_ingestion.artist_calls == ["ya-artist-1"]
 
     provider_results = {
         provider_result["provider"]: provider_result
         for provider_result in response.result_json["providers"]
     }
+    assert provider_results["youtube"]["status"] == "updated"
     assert provider_results["youtube"]["mode"] == "entity_refresh"
+    assert provider_results["yandex"]["status"] == "updated"
     assert provider_results["yandex"]["mode"] == "catalog_ingest"
     assert provider_results["yandex"]["catalog_artist_provider_id"] == "ya-artist-1"
     assert provider_results["yandex"]["platform_artist_count"] == 2

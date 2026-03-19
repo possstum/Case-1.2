@@ -33,7 +33,7 @@ class NoOpSearchRefreshScheduler:
         *,
         query: str,
         kind: str | None,
-        limit: int,
+        limit: int | None,
     ) -> str | None:
         return None
 

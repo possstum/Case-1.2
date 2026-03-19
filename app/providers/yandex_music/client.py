@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from urllib.error import HTTPError
+from urllib.parse import parse_qs, urlencode, urlparse
 from typing import Any, Optional
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from app.providers.yandex_music.mapper import map_artist, map_release, map_track
@@ -35,6 +36,7 @@ class YandexMusicClient(MusicProvider):
     provider_name = ProviderName.YANDEX
     _api_root = "https://api.music.yandex.net"
     _search_url = f"{_api_root}/search"
+    _search_page_size = 20
 
     def __init__(self, *, token: Optional[str] = None, timeout_seconds: float = 5.0) -> None:
         self.token = token
@@ -44,34 +46,32 @@ class YandexMusicClient(MusicProvider):
         self,
         query: str,
         *,
-        limit: int,
+        limit: int | None,
         kind: Optional[ProviderEntityKind] = None,
     ) -> ProviderSearchResult:
         items: list[ProviderSearchHit] = []
         for resolved_kind in self._resolve_kinds(kind):
-            params = {
-                "text": query,
-                "page": "0",
-                "type": self._search_type_for_kind(resolved_kind),
-                "nocorrect": "false",
-                "page-size": str(limit),
-            }
-            payload = self._get_json(self._search_url, params=params)
-            items.extend(self._map_search_items(resolved_kind, payload))
-        return ProviderSearchResult(query=query, items=items[:limit])
+            items.extend(self._search_kind(query, kind=resolved_kind, limit=limit))
+        return ProviderSearchResult(query=query, items=items if limit is None else items[:limit])
 
     def get_artist(self, provider_id: str) -> ProviderArtist:
         return map_artist(self.get_artist_detail(provider_id).artist)
 
     def get_release(self, provider_id: str) -> ProviderRelease:
-        payload = self._get_json(f"{self._api_root}/albums/{provider_id}")
+        payload = self._get_json(
+            f"{self._api_root}/albums/{provider_id}",
+            retry_with_auth_on_statuses=(401, 403),
+        )
         release = self._release_payload_from_item(payload.get("result"))
         if release is None:
             raise ValueError(f"Yandex Music release {provider_id} was not found in response payload")
         return map_release(release)
 
     def get_track(self, provider_id: str) -> ProviderTrack:
-        payload = self._get_json(f"{self._api_root}/tracks/{provider_id}")
+        payload = self._get_json(
+            f"{self._api_root}/tracks/{provider_id}",
+            retry_with_auth_on_statuses=(401, 403),
+        )
         result = payload.get("result")
         item = result[0] if isinstance(result, list) and result else None
         track = self._track_payload_from_item(item)
@@ -80,7 +80,10 @@ class YandexMusicClient(MusicProvider):
         return map_track(track)
 
     def get_artist_detail(self, provider_id: str) -> YandexMusicArtistDetailPayload:
-        payload = self._get_json(f"{self._api_root}/artists/{provider_id}")
+        payload = self._get_json(
+            f"{self._api_root}/artists/{provider_id}",
+            retry_with_auth_on_statuses=(401, 403),
+        )
         result = payload.get("result") or {}
         artist = self._artist_payload_from_item(result.get("artist"))
         if artist is None:
@@ -99,7 +102,10 @@ class YandexMusicClient(MusicProvider):
         )
 
     def get_artist_brief_info(self, provider_id: str) -> YandexMusicArtistBriefInfoPayload:
-        payload = self._get_json(f"{self._api_root}/artists/{provider_id}/brief-info")
+        payload = self._get_json(
+            f"{self._api_root}/artists/{provider_id}/brief-info",
+            retry_with_auth_on_statuses=(401, 403),
+        )
         result = payload.get("result") or {}
         artist = self._artist_payload_from_item(result.get("artist"))
         if artist is None:
@@ -137,6 +143,7 @@ class YandexMusicClient(MusicProvider):
         payload = self._get_json(
             f"{self._api_root}/artists/{provider_id}/direct-albums",
             params={"page": str(page), "page-size": str(page_size)},
+            retry_with_auth_on_statuses=(401, 403),
         )
         result = payload.get("result") or {}
         return YandexMusicArtistDirectAlbumsPayload(
@@ -156,6 +163,7 @@ class YandexMusicClient(MusicProvider):
         payload = self._get_json(
             f"{self._api_root}/artists/{provider_id}/tracks",
             params={"page": str(page), "page-size": str(page_size)},
+            retry_with_auth_on_statuses=(401, 403),
         )
         result = payload.get("result") or {}
         return YandexMusicArtistTracksPayload(
@@ -166,7 +174,10 @@ class YandexMusicClient(MusicProvider):
         )
 
     def get_release_with_tracks(self, provider_id: str) -> YandexMusicAlbumWithTracksPayload:
-        payload = self._get_json(f"{self._api_root}/albums/{provider_id}/with-tracks")
+        payload = self._get_json(
+            f"{self._api_root}/albums/{provider_id}/with-tracks",
+            retry_with_auth_on_statuses=(401, 403),
+        )
         result = payload.get("result") or {}
         release = self._release_payload_from_item(result)
         if release is None:
@@ -193,19 +204,62 @@ class YandexMusicClient(MusicProvider):
         url: str,
         *,
         params: Optional[dict[str, str]] = None,
-        use_auth: bool = False,
+        retry_with_auth_on_statuses: tuple[int, ...] = (),
     ) -> dict[str, Any]:
         full_url = f"{url}?{urlencode(params)}" if params else url
-        if use_auth and self.token:
-            request = Request(
-                full_url,
-                headers={"Authorization": f"OAuth {self.token}"},
-            )
-            target: Request | str = request
-        else:
-            target = full_url
+        try:
+            return self._read_json(full_url)
+        except HTTPError as exc:
+            oauth_token = self._normalized_oauth_token()
+            if exc.code not in retry_with_auth_on_statuses or oauth_token is None:
+                raise
+        request = Request(
+            full_url,
+            headers={"Authorization": f"OAuth {oauth_token}"},
+        )
+        return self._read_json(request)
+
+    def _read_json(self, target: Request | str) -> dict[str, Any]:
         with urlopen(target, timeout=self.timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    def _normalized_oauth_token(self) -> Optional[str]:
+        raw_token = (self.token or "").strip()
+        if not raw_token:
+            return None
+
+        lowered = raw_token.lower()
+        if lowered.startswith("oauth "):
+            raw_token = raw_token[6:].strip()
+        elif lowered.startswith("bearer "):
+            raw_token = raw_token[7:].strip()
+
+        if not raw_token:
+            return None
+
+        extracted_token = self._extract_access_token(raw_token)
+        if extracted_token is not None:
+            raw_token = extracted_token
+
+        if any(marker in raw_token for marker in ("&token_type=", "&expires_in=", "&cid=")):
+            raw_token = raw_token.split("&", 1)[0].strip()
+
+        return raw_token or None
+
+    def _extract_access_token(self, raw_token: str) -> Optional[str]:
+        if "access_token=" not in raw_token:
+            return None
+
+        candidates = [raw_token.lstrip("#?")]
+        parsed_url = urlparse(raw_token)
+        candidates.extend((parsed_url.query, parsed_url.fragment))
+        for candidate in candidates:
+            if not candidate:
+                continue
+            token = parse_qs(candidate).get("access_token", [None])[0]
+            if token:
+                return token.strip() or None
+        return None
 
     def _resolve_kinds(
         self,
@@ -225,6 +279,43 @@ class YandexMusicClient(MusicProvider):
         if kind == ProviderEntityKind.RELEASE:
             return "album"
         return "track"
+
+    def _search_kind(
+        self,
+        query: str,
+        *,
+        kind: ProviderEntityKind,
+        limit: int | None,
+    ) -> list[ProviderSearchHit]:
+        items: list[ProviderSearchHit] = []
+        page = 0
+
+        while True:
+            page_size = self._search_request_size(limit, current_size=len(items))
+            params = {
+                "text": query,
+                "page": str(page),
+                "type": self._search_type_for_kind(kind),
+                "nocorrect": "false",
+                "page-size": str(page_size),
+            }
+            payload = self._get_json(self._search_url, params=params)
+            mapped_items = self._map_search_items(kind, payload)
+            if not mapped_items:
+                return items
+
+            items.extend(mapped_items)
+            if limit is not None and len(items) >= limit:
+                return items[:limit]
+            if len(mapped_items) < page_size:
+                return items
+            page += 1
+
+    def _search_request_size(self, limit: int | None, *, current_size: int) -> int:
+        if limit is None:
+            return self._search_page_size
+        remaining = max(1, limit - current_size)
+        return min(remaining, self._search_page_size)
 
     def _map_search_items(
         self,

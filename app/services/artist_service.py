@@ -10,11 +10,26 @@ from app.api.schemas.entities import (
     ArtistDetailResponse,
     ExplainabilityPayload,
     LinkedPlatformEntityPayload,
+    MissingOnYandexCandidatePayload,
+    MissingOnYandexItemPayload,
+    MissingOnYandexViewPayload,
+    ProviderCatalogSectionItemPayload,
+    ProviderCatalogSectionPayload,
     RelatedReleasePayload,
     RelatedTrackPayload,
 )
 from app.core.errors import NotFoundError
-from app.db.models import Artist, LinkArtist, LinkRelease, Release, ReleaseArtist, TrackArtist
+from app.db.models import (
+    Artist,
+    LinkArtist,
+    LinkRelease,
+    PlatformCatalogList,
+    PlatformCatalogListItem,
+    PlatformRelease,
+    Release,
+    ReleaseArtist,
+    TrackArtist,
+)
 from app.providers import ProviderName
 
 
@@ -76,6 +91,8 @@ class ArtistService:
                 )
             ],
             platforms=platforms,
+            yandex_catalog_sections=self._build_yandex_catalog_sections(artist),
+            missing_on_yandex_view=self._build_missing_on_yandex_view(artist),
         )
 
     def get_artist_model(self, artist_id: int) -> Artist:
@@ -138,6 +155,231 @@ class ArtistService:
 
     def _release_is_missing_yandex(self, platform_links: list[LinkRelease]) -> bool:
         return ProviderName.YANDEX.value in self._release_missing_platforms(platform_links)
+
+    def _build_yandex_catalog_sections(self, artist: Artist) -> list[ProviderCatalogSectionPayload]:
+        rows = self._load_yandex_catalog_lists(
+            artist,
+            list_kinds=("direct_albums", "similar_artists"),
+        )
+        if not rows:
+            return []
+
+        section_order = {
+            "direct_albums": 0,
+            "similar_artists": 1,
+        }
+        grouped: dict[str, ProviderCatalogSectionPayload] = {}
+        for row in rows:
+            section = grouped.setdefault(
+                row.list_kind,
+                ProviderCatalogSectionPayload(
+                    provider=ProviderName.YANDEX.value,
+                    list_kind=row.list_kind,
+                    title=self._catalog_section_title(row.list_kind),
+                    total_items=row.total_items,
+                    items=[],
+                ),
+            )
+            if section.total_items is None and row.total_items is not None:
+                section.total_items = row.total_items
+            for item in sorted(row.items, key=lambda entry: entry.position):
+                payload = self._catalog_section_item_payload(item)
+                if payload is not None:
+                    section.items.append(payload)
+
+        return sorted(
+            grouped.values(),
+            key=lambda section: (section_order.get(section.list_kind, 9), section.title.casefold()),
+        )
+
+    def _catalog_section_item_payload(
+        self,
+        item: PlatformCatalogListItem,
+    ) -> ProviderCatalogSectionItemPayload | None:
+        if item.platform_release is not None:
+            release = item.platform_release
+            subtitle_parts = []
+            if release.release_year is not None:
+                subtitle_parts.append(str(release.release_year))
+            if release.release_type:
+                subtitle_parts.append(release.release_type)
+            track_count = release.raw_json.get("track_count")
+            if track_count is not None:
+                track_label = "track" if track_count == 1 else "tracks"
+                subtitle_parts.append(f"{track_count} {track_label}")
+            return ProviderCatalogSectionItemPayload(
+                item_kind="release",
+                provider_id=release.platform_id,
+                label=release.title,
+                subtitle=" · ".join(subtitle_parts) if subtitle_parts else None,
+                url=release.raw_json.get("url"),
+            )
+
+        if item.platform_artist is not None:
+            platform_artist = item.platform_artist
+            return ProviderCatalogSectionItemPayload(
+                item_kind="artist",
+                provider_id=platform_artist.platform_id,
+                label=platform_artist.display_name,
+                subtitle="Adjacent artist on Yandex",
+                url=platform_artist.raw_json.get("url"),
+            )
+
+        title = item.raw_json.get("title") or item.external_ref
+        if title is None:
+            return None
+        return ProviderCatalogSectionItemPayload(
+            item_kind=item.item_kind,
+            provider_id=item.external_ref,
+            label=title,
+            subtitle=None,
+            url=item.raw_json.get("url"),
+        )
+
+    def _catalog_section_title(self, list_kind: str) -> str:
+        titles = {
+            "direct_albums": "Yandex direct albums",
+            "similar_artists": "Adjacent artists on Yandex",
+        }
+        return titles.get(list_kind, list_kind.replace("_", " ").title())
+
+    def _build_missing_on_yandex_view(self, artist: Artist) -> MissingOnYandexViewPayload:
+        rows = [
+            credit
+            for credit in sorted(
+                artist.release_credits,
+                key=lambda item: (item.position, item.release.title.casefold()),
+            )
+            if self._release_is_missing_yandex(credit.release.platform_links)
+        ]
+        if not rows:
+            return MissingOnYandexViewPayload()
+
+        candidate_rows = self._load_yandex_catalog_lists(
+            artist,
+            list_kinds=("direct_albums", "albums", "also_albums", "last_releases"),
+        )
+        candidates = self._build_yandex_release_candidates(candidate_rows)
+
+        items: list[MissingOnYandexItemPayload] = []
+        for credit in rows:
+            release = credit.release
+            matching_candidates = self._match_yandex_candidates(release, candidates)
+            status = "catalog_candidate" if matching_candidates else "missing"
+            items.append(
+                MissingOnYandexItemPayload(
+                    release_id=release.id,
+                    title=release.title,
+                    release_type=release.release_type,
+                    release_year=release.release_year,
+                    track_count=len(release.tracks) if release.tracks else None,
+                    role=credit.role,
+                    position=credit.position,
+                    status=status,
+                    yandex_candidates=matching_candidates,
+                )
+            )
+
+        candidate_count = sum(1 for item in items if item.status == "catalog_candidate")
+        missing_count = sum(1 for item in items if item.status == "missing")
+        return MissingOnYandexViewPayload(
+            total_items=len(items),
+            candidate_count=candidate_count,
+            missing_count=missing_count,
+            items=items,
+        )
+
+    def _load_yandex_catalog_lists(
+        self,
+        artist: Artist,
+        *,
+        list_kinds: tuple[str, ...],
+    ) -> list[PlatformCatalogList]:
+        yandex_link = next(
+            (
+                link
+                for link in artist.platform_links
+                if link.platform_artist.platform == ProviderName.YANDEX.value
+            ),
+            None,
+        )
+        if yandex_link is None:
+            return []
+
+        statement = (
+            select(PlatformCatalogList)
+            .options(
+                selectinload(PlatformCatalogList.items).selectinload(PlatformCatalogListItem.platform_release),
+                selectinload(PlatformCatalogList.items).selectinload(PlatformCatalogListItem.platform_artist),
+            )
+            .where(
+                PlatformCatalogList.platform == ProviderName.YANDEX.value,
+                PlatformCatalogList.owner_kind == "artist",
+                PlatformCatalogList.owner_platform_id == yandex_link.platform_artist.platform_id,
+                PlatformCatalogList.list_kind.in_(list_kinds),
+            )
+            .order_by(PlatformCatalogList.list_kind, PlatformCatalogList.page, PlatformCatalogList.id)
+        )
+        return self.session.scalars(statement).all()
+
+    def _build_yandex_release_candidates(
+        self,
+        rows: list[PlatformCatalogList],
+    ) -> list[tuple[PlatformRelease, list[str]]]:
+        candidate_map: dict[str, tuple[PlatformRelease, set[str]]] = {}
+        for row in rows:
+            for item in sorted(row.items, key=lambda entry: entry.position):
+                release = item.platform_release
+                if release is None:
+                    continue
+                existing = candidate_map.get(release.platform_id)
+                if existing is None:
+                    candidate_map[release.platform_id] = (release, {row.list_kind})
+                else:
+                    existing[1].add(row.list_kind)
+        return [
+            (release, sorted(source_list_kinds))
+            for release, source_list_kinds in candidate_map.values()
+        ]
+
+    def _match_yandex_candidates(
+        self,
+        release: Release,
+        candidates: list[tuple[PlatformRelease, list[str]]],
+    ) -> list[MissingOnYandexCandidatePayload]:
+        matched: list[MissingOnYandexCandidatePayload] = []
+        for candidate, source_list_kinds in candidates:
+            if not self._is_yandex_catalog_candidate(release, candidate):
+                continue
+            matched.append(
+                MissingOnYandexCandidatePayload(
+                    provider_id=candidate.platform_id,
+                    label=candidate.title,
+                    release_type=candidate.release_type,
+                    release_year=candidate.release_year,
+                    source_list_kinds=source_list_kinds,
+                    url=candidate.raw_json.get("url"),
+                )
+            )
+        return sorted(
+            matched,
+            key=lambda item: (
+                item.release_year or 0,
+                item.label.casefold(),
+                item.provider_id,
+            ),
+        )
+
+    def _is_yandex_catalog_candidate(self, release: Release, candidate: PlatformRelease) -> bool:
+        if release.match_norm != candidate.match_norm:
+            return False
+        if (
+            release.release_year is not None
+            and candidate.release_year is not None
+            and release.release_year != candidate.release_year
+        ):
+            return False
+        return True
 
     def _coerce_aware(self, value: datetime | None) -> datetime | None:
         if value is None or value.tzinfo is not None:

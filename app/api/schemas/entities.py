@@ -70,6 +70,50 @@ class RelatedTrackPayload(BaseModel):
     track_number: Optional[int] = None
 
 
+class ProviderCatalogSectionItemPayload(BaseModel):
+    item_kind: str
+    provider_id: Optional[str] = None
+    label: str
+    subtitle: Optional[str] = None
+    url: Optional[str] = None
+
+
+class ProviderCatalogSectionPayload(BaseModel):
+    provider: str
+    list_kind: str
+    title: str
+    total_items: Optional[int] = None
+    items: list[ProviderCatalogSectionItemPayload] = Field(default_factory=list)
+
+
+class MissingOnYandexCandidatePayload(BaseModel):
+    provider_id: str
+    label: str
+    release_type: Optional[str] = None
+    release_year: Optional[int] = None
+    source_list_kinds: list[str] = Field(default_factory=list)
+    url: Optional[str] = None
+
+
+class MissingOnYandexItemPayload(BaseModel):
+    release_id: int
+    title: str
+    release_type: Optional[str] = None
+    release_year: Optional[int] = None
+    track_count: Optional[int] = None
+    role: Optional[str] = None
+    position: int
+    status: str
+    yandex_candidates: list[MissingOnYandexCandidatePayload] = Field(default_factory=list)
+
+
+class MissingOnYandexViewPayload(BaseModel):
+    total_items: int = 0
+    candidate_count: int = 0
+    missing_count: int = 0
+    items: list[MissingOnYandexItemPayload] = Field(default_factory=list)
+
+
 class EntityDetailBase(BaseModel):
     id: int
     kind: str
@@ -88,6 +132,8 @@ class ArtistDetailResponse(EntityDetailBase):
     aliases: list[ArtistAliasPayload] = Field(default_factory=list)
     releases: list[RelatedReleasePayload] = Field(default_factory=list)
     tracks: list[RelatedTrackPayload] = Field(default_factory=list)
+    yandex_catalog_sections: list[ProviderCatalogSectionPayload] = Field(default_factory=list)
+    missing_on_yandex_view: MissingOnYandexViewPayload = Field(default_factory=MissingOnYandexViewPayload)
 
 
 class ReleaseDetailResponse(EntityDetailBase):

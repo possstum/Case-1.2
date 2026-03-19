@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -27,15 +28,25 @@ from app.providers import (
 )
 from app.utils.normalization import display_norm, match_norm
 from tests.conftest import StubHealthService
+from tests.test_support import make_track
 
 
-def make_artist(provider: ProviderName, provider_id: str, name: str) -> ProviderArtist:
+def make_artist(
+    provider: ProviderName,
+    provider_id: str,
+    name: str,
+    *,
+    aliases: list[str] | None = None,
+) -> ProviderArtist:
+    aliases = aliases or []
     return ProviderArtist(
         provider=provider,
         provider_id=provider_id,
         name=name,
         display_norm=display_norm(name),
         match_norm=match_norm(name),
+        aliases=aliases,
+        alias_match_norms=[match_norm(alias) for alias in aliases],
     )
 
 
@@ -58,7 +69,7 @@ class StubSearchProvider(MusicProvider):
         self,
         query: str,
         *,
-        limit: int,
+        limit: int | None,
         kind: Optional[ProviderEntityKind] = None,
     ) -> ProviderSearchResult:
         self.search_calls += 1
@@ -71,7 +82,7 @@ class StubSearchProvider(MusicProvider):
         items = self.hits
         if kind is not None:
             items = [hit for hit in items if hit.kind == kind]
-        return ProviderSearchResult(query=query, items=items[:limit])
+        return ProviderSearchResult(query=query, items=items if limit is None else items[:limit])
 
     def get_artist(self, provider_id: str):
         raise NotImplementedError
@@ -88,7 +99,7 @@ class RecordingScheduler:
         self.job_id = job_id
         self.calls: list[dict[str, object]] = []
 
-    def schedule(self, *, query: str, kind: Optional[str], limit: int) -> Optional[str]:
+    def schedule(self, *, query: str, kind: Optional[str], limit: int | None) -> Optional[str]:
         self.calls.append({"query": query, "kind": kind, "limit": limit})
         return self.job_id
 
@@ -125,7 +136,7 @@ def seed_search_cache(
     stale_at: datetime,
     expires_at: datetime,
     last_refreshed_at: datetime,
-    cache_key: str = "search:v1:artist:5:krovostok",
+    cache_key: str = "search:v2:artist:5:krovostok",
     query_text: str = "Кровосток",
     normalized_query: str = "krovostok",
     kind: str = "artist",
@@ -366,6 +377,275 @@ def test_search_cold_miss_fetches_providers_persists_cache_and_links(
     assert db_session.scalar(select(func.count()).select_from(PlatformArtist)) == 2
     assert db_session.scalar(select(func.count()).select_from(Artist)) == 1
     assert db_session.scalar(select(func.count()).select_from(LinkArtist)) == 2
+
+
+def test_search_track_without_limit_returns_full_provider_set_and_caches_all_key(
+    sqlite_database_url: str,
+    migrated_sqlite_database,
+    db_session,
+) -> None:
+    yandex_tracks = [
+        ProviderSearchHit(
+            kind=ProviderEntityKind.TRACK,
+            entity=make_track(
+                ProviderName.YANDEX,
+                f"ya-track-{index}",
+                f"Трек {index}",
+                artist_names=["Кровосток"],
+                duration_ms=180000 + index,
+            ),
+        )
+        for index in range(1, 13)
+    ]
+    yandex = StubSearchProvider(
+        provider_name=ProviderName.YANDEX,
+        hits=yandex_tracks,
+    )
+
+    with create_search_client(
+        provider_registry=ProviderRegistry((yandex,)),
+        refresh_scheduler=RecordingScheduler(),
+        limiter=AllowAllLimiter(),
+    ) as client:
+        response = client.get("/search", params={"q": "Кровосток", "kind": "track"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["results"]) == 12
+    assert payload["results"][0]["platforms"]["yandex"]["label"] == "Трек 1"
+    assert db_session.scalar(select(SearchCache.cache_key)) == "search:v2:track:all:krovostok"
+
+
+@pytest.mark.parametrize(
+    ("query", "youtube_exact_name", "yandex_exact_name", "live_prefix"),
+    [
+        ("Krovostok", "Krovostok - Topic", "Krovostok", "Krovostok"),
+        ("Motorama", "Motorama - Topic", "Motorama", "Motorama"),
+    ],
+)
+def test_search_artist_query_rerank_prefers_exact_canonical_artist_over_noisier_match(
+    sqlite_database_url: str,
+    migrated_sqlite_database,
+    query: str,
+    youtube_exact_name: str,
+    yandex_exact_name: str,
+    live_prefix: str,
+) -> None:
+    youtube = StubSearchProvider(
+        provider_name=ProviderName.YOUTUBE,
+        hits=[
+            ProviderSearchHit(
+                kind=ProviderEntityKind.ARTIST,
+                entity=make_artist(
+                    ProviderName.YOUTUBE,
+                    "yt-exact",
+                    youtube_exact_name,
+                    aliases=[query],
+                ),
+            ),
+            ProviderSearchHit(
+                kind=ProviderEntityKind.ARTIST,
+                entity=make_artist(
+                    ProviderName.YOUTUBE,
+                    "yt-live",
+                    f"{live_prefix} Live Archive",
+                ),
+            ),
+        ],
+    )
+    yandex = StubSearchProvider(
+        provider_name=ProviderName.YANDEX,
+        hits=[
+            ProviderSearchHit(
+                kind=ProviderEntityKind.ARTIST,
+                entity=make_artist(
+                    ProviderName.YANDEX,
+                    "ya-exact",
+                    yandex_exact_name,
+                ),
+            ),
+            ProviderSearchHit(
+                kind=ProviderEntityKind.ARTIST,
+                entity=make_artist(
+                    ProviderName.YANDEX,
+                    "ya-live-a",
+                    f"{live_prefix} Live Archive",
+                ),
+            ),
+            ProviderSearchHit(
+                kind=ProviderEntityKind.ARTIST,
+                entity=make_artist(
+                    ProviderName.YANDEX,
+                    "ya-live-b",
+                    f"{live_prefix} Live Archive (Official)",
+                ),
+            ),
+        ],
+    )
+
+    with create_search_client(
+        provider_registry=ProviderRegistry((youtube, yandex)),
+        refresh_scheduler=RecordingScheduler(),
+        limiter=AllowAllLimiter(),
+    ) as client:
+        response = client.get("/search", params={"q": query, "kind": "artist", "limit": 5})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cache"]["status"] == "miss"
+
+    exact_result = payload["results"][0]
+    live_result = payload["results"][1]
+
+    assert exact_result["kind"] == "artist"
+    assert exact_result["canonical_id"] is not None
+    assert exact_result["platforms"]["yandex"]["label"] == yandex_exact_name
+    assert exact_result["score"] > live_result["score"]
+    assert exact_result["features_json"]["search_rank_matching_score"] < live_result["features_json"]["search_rank_matching_score"]
+    assert exact_result["features_json"]["search_rank_version"] == "artist_query_v1"
+    assert exact_result["features_json"]["search_rank_best_platform"] == "yandex"
+    assert exact_result["features_json"]["search_rank_query_match_norm"] == match_norm(query)
+    assert "name_token_overlap" in exact_result["features_json"]
+    assert "decision_reasons" in exact_result["features_json"]
+    assert "search_rank_score" in exact_result["features_json"]
+
+
+def test_search_ignores_old_v1_artist_cache_and_writes_v2_entry(
+    sqlite_database_url: str,
+    migrated_sqlite_database,
+    db_session,
+) -> None:
+    now = datetime.now(timezone.utc)
+    seed_search_cache(
+        db_session,
+        cache_key="search:v1:artist:5:krovostok",
+        response_json={
+            "query": "Krovostok",
+            "normalized_query": "krovostok",
+            "kind": "artist",
+            "partial": False,
+            "missing_platforms": [],
+            "results": [
+                {
+                    "kind": "artist",
+                    "canonical_id": 999,
+                    "decision": "auto",
+                    "score": 0.99,
+                    "features_json": {"seeded": "old-cache"},
+                    "platforms": {
+                        "youtube": None,
+                        "yandex": {
+                            "provider": "yandex",
+                            "provider_id": "ya-stale",
+                            "kind": "artist",
+                            "label": "Stale Artist",
+                            "display_norm": "stale artist",
+                            "match_norm": "stale artist",
+                        },
+                    },
+                }
+            ],
+        },
+        is_partial=False,
+        stale_at=now + timedelta(minutes=5),
+        expires_at=now + timedelta(minutes=30),
+        last_refreshed_at=now,
+    )
+    youtube = StubSearchProvider(
+        provider_name=ProviderName.YOUTUBE,
+        hits=[ProviderSearchHit(kind=ProviderEntityKind.ARTIST, entity=make_artist(ProviderName.YOUTUBE, "yt-1", "Krovostok"))],
+    )
+    yandex = StubSearchProvider(
+        provider_name=ProviderName.YANDEX,
+        hits=[ProviderSearchHit(kind=ProviderEntityKind.ARTIST, entity=make_artist(ProviderName.YANDEX, "ya-1", "Krovostok"))],
+    )
+
+    with create_search_client(
+        provider_registry=ProviderRegistry((youtube, yandex)),
+        refresh_scheduler=RecordingScheduler(),
+        limiter=AllowAllLimiter(),
+    ) as client:
+        response = client.get("/search", params={"q": "Krovostok", "kind": "artist", "limit": 5})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cache"]["status"] == "miss"
+    assert payload["results"][0]["canonical_id"] != 999
+    assert youtube.search_calls == 1
+    assert yandex.search_calls == 1
+
+    db_session.expire_all()
+    assert db_session.scalar(select(func.count()).select_from(SearchCache)) == 2
+    assert (
+        db_session.scalar(select(SearchCache).where(SearchCache.cache_key == "search:v2:artist:5:krovostok")) is not None
+    )
+
+
+def test_search_artist_warm_cache_replays_same_primary_result_and_score(
+    sqlite_database_url: str,
+    migrated_sqlite_database,
+    db_session,
+) -> None:
+    youtube = StubSearchProvider(
+        provider_name=ProviderName.YOUTUBE,
+        hits=[
+            ProviderSearchHit(
+                kind=ProviderEntityKind.ARTIST,
+                entity=make_artist(
+                    ProviderName.YOUTUBE,
+                    "yt-exact",
+                    "Motorama - Topic",
+                    aliases=["Motorama"],
+                ),
+            ),
+            ProviderSearchHit(
+                kind=ProviderEntityKind.ARTIST,
+                entity=make_artist(
+                    ProviderName.YOUTUBE,
+                    "yt-live",
+                    "Motorama Live Archive",
+                ),
+            ),
+        ],
+    )
+    yandex = StubSearchProvider(
+        provider_name=ProviderName.YANDEX,
+        hits=[
+            ProviderSearchHit(kind=ProviderEntityKind.ARTIST, entity=make_artist(ProviderName.YANDEX, "ya-exact", "Motorama")),
+            ProviderSearchHit(kind=ProviderEntityKind.ARTIST, entity=make_artist(ProviderName.YANDEX, "ya-live-a", "Motorama Live Archive")),
+            ProviderSearchHit(
+                kind=ProviderEntityKind.ARTIST,
+                entity=make_artist(ProviderName.YANDEX, "ya-live-b", "Motorama Live Archive (Official)"),
+            ),
+        ],
+    )
+
+    with create_search_client(
+        provider_registry=ProviderRegistry((youtube, yandex)),
+        refresh_scheduler=RecordingScheduler(),
+        limiter=AllowAllLimiter(),
+    ) as client:
+        first_response = client.get("/search", params={"q": "Motorama", "kind": "artist", "limit": 5})
+        second_response = client.get("/search", params={"q": "Motorama", "kind": "artist", "limit": 5})
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+
+    first_payload = first_response.json()
+    second_payload = second_response.json()
+    first_top = first_payload["results"][0]
+    second_top = second_payload["results"][0]
+
+    assert first_payload["cache"]["status"] == "miss"
+    assert second_payload["cache"]["status"] == "fresh"
+    assert first_top["canonical_id"] == second_top["canonical_id"]
+    assert first_top["platforms"]["youtube"]["provider_id"] == second_top["platforms"]["youtube"]["provider_id"]
+    assert first_top["platforms"]["yandex"]["provider_id"] == second_top["platforms"]["yandex"]["provider_id"]
+    assert first_top["score"] == second_top["score"]
+    assert first_top["features_json"]["search_rank_version"] == "artist_query_v1"
+    assert second_top["features_json"]["search_rank_version"] == "artist_query_v1"
+    assert youtube.search_calls == 1
+    assert yandex.search_calls == 1
 
 
 def test_search_returns_partial_response_when_provider_fails(

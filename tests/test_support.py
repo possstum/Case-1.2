@@ -17,6 +17,8 @@ from app.db.models import (
     LinkRelease,
     LinkTrack,
     PlatformArtist,
+    PlatformCatalogList,
+    PlatformCatalogListItem,
     PlatformRelease,
     PlatformTrack,
 )
@@ -125,7 +127,7 @@ class StubProvider(MusicProvider):
         self,
         query: str,
         *,
-        limit: int,
+        limit: int | None,
         kind: Optional[ProviderEntityKind] = None,
     ) -> ProviderSearchResult:
         if self.search_error is not None:
@@ -133,7 +135,7 @@ class StubProvider(MusicProvider):
         items = self.search_hits
         if kind is not None:
             items = [item for item in items if item.kind == kind]
-        return ProviderSearchResult(query=query, items=items[:limit])
+        return ProviderSearchResult(query=query, items=items if limit is None else items[:limit])
 
     def get_artist(self, provider_id: str) -> ProviderArtist:
         if self.get_error is not None:
@@ -190,7 +192,7 @@ def create_test_client(
     return TestClient(application)
 
 
-def seed_catalog(session) -> dict[str, int]:
+def seed_catalog(session, *, include_yandex_catalog_sections: bool = False) -> dict[str, int]:
     artist_repository = ArtistRepository(session)
     release_repository = ReleaseRepository(session)
     track_repository = TrackRepository(session)
@@ -289,6 +291,147 @@ def seed_catalog(session) -> dict[str, int]:
         ]
     )
     session.flush()
+    candidate_release = None
+    missing_release = None
+
+    if include_yandex_catalog_sections:
+        platform_release_yandex_native = PlatformRelease(
+            platform="yandex",
+            platform_id="ya-release-native-1",
+            title="Raw Yandex Sessions",
+            display_norm=display_norm("Raw Yandex Sessions"),
+            match_norm=match_norm("Raw Yandex Sessions"),
+            release_type="album",
+            release_year=2019,
+            raw_json={
+                "artist_names": ["Krovostok"],
+                "track_count": 8,
+                "url": "https://music.yandex.test/release/ya-release-native-1",
+            },
+        )
+        platform_artist_yandex_neighbor = PlatformArtist(
+            platform="yandex",
+            platform_id="ya-artist-neighbor-1",
+            display_name="Ploho",
+            display_norm=display_norm("Ploho"),
+            match_norm=match_norm("Ploho"),
+            raw_json={"url": "https://music.yandex.test/artist/ya-artist-neighbor-1"},
+        )
+        session.add_all([platform_release_yandex_native, platform_artist_yandex_neighbor])
+        session.flush()
+
+        direct_albums_list = PlatformCatalogList(
+            platform="yandex",
+            owner_kind="artist",
+            owner_platform_id=platform_artist_yandex.platform_id,
+            list_kind="direct_albums",
+            source_endpoint=f"/artists/{platform_artist_yandex.platform_id}/direct-albums",
+            title="Direct albums",
+            page=0,
+            page_size=1,
+            total_items=1,
+            raw_json={},
+        )
+        similar_artists_list = PlatformCatalogList(
+            platform="yandex",
+            owner_kind="artist",
+            owner_platform_id=platform_artist_yandex.platform_id,
+            list_kind="similar_artists",
+            source_endpoint=f"/artists/{platform_artist_yandex.platform_id}",
+            title="Similar artists",
+            page=0,
+            page_size=1,
+            total_items=1,
+            raw_json={},
+        )
+        session.add_all([direct_albums_list, similar_artists_list])
+        session.flush()
+        session.add_all(
+            [
+                PlatformCatalogListItem(
+                    catalog_list_id=direct_albums_list.id,
+                    position=0,
+                    item_kind="release",
+                    platform_release_id=platform_release_yandex_native.id,
+                    raw_json={"title": platform_release_yandex_native.title},
+                ),
+                PlatformCatalogListItem(
+                    catalog_list_id=similar_artists_list.id,
+                    position=0,
+                    item_kind="artist",
+                    platform_artist_id=platform_artist_yandex_neighbor.id,
+                    raw_json={"title": platform_artist_yandex_neighbor.display_name},
+                ),
+            ]
+        )
+
+        candidate_release = release_repository.create(
+            title="Raw Yandex Sessions",
+            display_norm=display_norm("Raw Yandex Sessions"),
+            match_norm=match_norm("Raw Yandex Sessions"),
+            release_type="album",
+            release_year=2019,
+        )
+        missing_release = release_repository.create(
+            title="Lost Tape",
+            display_norm=display_norm("Lost Tape"),
+            match_norm=match_norm("Lost Tape"),
+            release_type="ep",
+            release_year=2018,
+        )
+        release_repository.add_artist(release=candidate_release, artist=artist, position=1)
+        release_repository.add_artist(release=missing_release, artist=artist, position=2)
+
+        platform_release_youtube_candidate = PlatformRelease(
+            platform="youtube",
+            platform_id="yt-release-2",
+            title="Raw Yandex Sessions",
+            display_norm=display_norm("Raw Yandex Sessions"),
+            match_norm=match_norm("Raw Yandex Sessions"),
+            release_type="album",
+            release_year=2019,
+            raw_json={
+                "artist_names": ["Krovostok"],
+                "track_count": 8,
+                "url": "https://music.youtube.test/release/yt-release-2",
+            },
+        )
+        platform_release_youtube_missing = PlatformRelease(
+            platform="youtube",
+            platform_id="yt-release-3",
+            title="Lost Tape",
+            display_norm=display_norm("Lost Tape"),
+            match_norm=match_norm("Lost Tape"),
+            release_type="ep",
+            release_year=2018,
+            raw_json={
+                "artist_names": ["Krovostok"],
+                "track_count": 5,
+                "url": "https://music.youtube.test/release/yt-release-3",
+            },
+        )
+        session.add_all([platform_release_youtube_candidate, platform_release_youtube_missing])
+        session.flush()
+
+        session.add_all(
+            [
+                LinkRelease(
+                    release_id=candidate_release.id,
+                    platform_release_id=platform_release_youtube_candidate.id,
+                    decision="auto",
+                    score=0.93,
+                    features_json={"title_similarity": 1.0, "year_delta": 0},
+                ),
+                LinkRelease(
+                    release_id=missing_release.id,
+                    platform_release_id=platform_release_youtube_missing.id,
+                    decision="auto",
+                    score=0.92,
+                    features_json={"title_similarity": 1.0, "year_delta": 0},
+                ),
+            ]
+        )
+
     session.add_all(
         [
             LinkArtist(
@@ -333,4 +476,6 @@ def seed_catalog(session) -> dict[str, int]:
         "artist_id": artist.id,
         "release_id": release.id,
         "track_id": track.id,
+        "candidate_release_id": candidate_release.id if include_yandex_catalog_sections else 0,
+        "missing_release_id": missing_release.id if include_yandex_catalog_sections else 0,
     }

@@ -82,7 +82,7 @@ class MusicProvider(ABC):
         self,
         query: str,
         *,
-        limit: int,
+        limit: int | None,
         kind: Optional[ProviderEntityKind] = None,
     ) -> ProviderSearchResult:
         raise NotImplementedError
