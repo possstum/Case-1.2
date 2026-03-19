@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 @lru_cache(maxsize=1)
 def get_redis_connection() -> Redis:
     settings = get_settings()
-    return Redis.from_url(settings.redis_url, decode_responses=True)
+    # RQ job hashes include pickled payload bytes, so worker/queue reads must stay binary-safe.
+    return Redis.from_url(settings.redis_url, decode_responses=False)
 
 
 def get_queue(name: Optional[str] = None) -> Queue:

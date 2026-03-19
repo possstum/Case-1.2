@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Optional, Protocol
+from urllib.error import HTTPError
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -129,14 +130,19 @@ class YandexCatalogIngestionService:
             summary=summary,
         )
 
-        brief_info = self.provider.get_artist_brief_info(provider_id)
-        artist_row = self._persist_artist(brief_info.artist, summary)
-        self._ingest_artist_brief_lists(
-            artist_row=artist_row,
-            payload=brief_info,
-            source_endpoint=f"/artists/{provider_id}/brief-info",
-            summary=summary,
-        )
+        try:
+            brief_info = self.provider.get_artist_brief_info(provider_id)
+        except HTTPError as exc:
+            if exc.code not in {401, 403}:
+                raise
+        else:
+            artist_row = self._persist_artist(brief_info.artist, summary)
+            self._ingest_artist_brief_lists(
+                artist_row=artist_row,
+                payload=brief_info,
+                source_endpoint=f"/artists/{provider_id}/brief-info",
+                summary=summary,
+            )
 
         direct_albums = self.provider.get_artist_direct_albums(
             provider_id,

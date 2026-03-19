@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.error import HTTPError
+
 from sqlalchemy import func, select
 
 from app.db.models import (
@@ -258,6 +260,17 @@ class StubYandexCatalogProvider:
         raise NotImplementedError
 
 
+class StubYandexCatalogProviderWithoutBriefInfo(StubYandexCatalogProvider):
+    def get_artist_brief_info(self, provider_id: str) -> YandexMusicArtistBriefInfoPayload:
+        raise HTTPError(
+            url=f"https://api.music.yandex.net/artists/{provider_id}/brief-info",
+            code=403,
+            msg="Forbidden",
+            hdrs=None,
+            fp=None,
+        )
+
+
 def test_yandex_catalog_ingestion_service_persists_artist_graph_idempotently(
     sqlite_database_url: str,
     migrated_sqlite_database,
@@ -367,6 +380,44 @@ def test_yandex_catalog_ingestion_service_persists_artist_graph_idempotently(
     )
     assert similar_artist_item is not None
     assert similar_artist_item.platform_artist_id is not None
+
+
+def test_yandex_catalog_ingestion_service_skips_brief_info_when_forbidden(
+    sqlite_database_url: str,
+    migrated_sqlite_database,
+    db_session,
+) -> None:
+    provider = StubYandexCatalogProviderWithoutBriefInfo()
+    service = YandexCatalogIngestionService(
+        session=db_session,
+        provider=provider,
+        link_service=LinkService(db_session),
+    )
+
+    summary = service.ingest_artist("1014281")
+    db_session.commit()
+    db_session.expire_all()
+
+    assert summary.artist_provider_id == "1014281"
+    assert len(summary.catalog_list_ids) > 0
+
+    direct_albums_list = db_session.scalar(
+        select(PlatformCatalogList).where(
+            PlatformCatalogList.owner_platform_id == "1014281",
+            PlatformCatalogList.list_kind == "direct_albums",
+            PlatformCatalogList.source_endpoint == "/artists/1014281/direct-albums",
+        )
+    )
+    assert direct_albums_list is not None
+
+    playlists_list = db_session.scalar(
+        select(PlatformCatalogList).where(
+            PlatformCatalogList.owner_platform_id == "1014281",
+            PlatformCatalogList.list_kind == "playlists",
+            PlatformCatalogList.source_endpoint == "/artists/1014281/brief-info",
+        )
+    )
+    assert playlists_list is None
 
 
 def test_yandex_catalog_storage_supports_segmented_read_queries(

@@ -35,13 +35,29 @@
 - `404 not_found` behavior for missing detail IDs
 - `/ui` availability, включая empty-results state и provider-disabled fallback when the effective provider registry is empty
 - staging-like `/health`, `/search`, and `/ui` success with PostgreSQL + Redis and blank provider tokens under the current default wiring
+- newer search-first clean-demo certification on `2026-03-19` for the exact queries `Motorama` and `Krovostok`:
+  - clean reset via `./scripts/reset_demo_env.sh`
+  - demo API startup via `./scripts/run_demo_api.sh`
+  - parallel cold-start `Motorama` `/search` and `/ui` both returned `200` after the provider-row race fix
+  - both queries stayed stable on cold and warm `/search` and `/ui`
+- separately documented production-like artist sync snapshot on `2026-03-19`: `/jobs/{job_id}` reached `finished`, both providers returned `status="updated"`, YouTube used `mode="entity_refresh"`, Yandex used `mode="catalog_ingest"`, `partial=false`, and post-sync Yandex catalog evidence remained visible in both API and UI
 
 ### Что не входит в verified baseline
 
-- live provider search behavior with real `YOUTUBE_MUSIC_TOKEN` / `YANDEX_MUSIC_TOKEN`
-- fully verified live refresh behavior through worker and provider HTTP
-- fully verified YouTube detail refresh behavior via `get_artist`, `get_release`, and `get_track`
-- любые claims о production readiness beyond the verified local and staging-like baseline
+- live provider search behavior with real `YOUTUBE_MUSIC_TOKEN` / `YANDEX_MUSIC_TOKEN` across arbitrary queries
+- any blanket claim that the top visible artist label is ideal for arbitrary queries; for example, `Krovostok` is certified as stable, but the current primary CTA label renders `Krovostok - Topic`
+- broader live refresh behavior through worker and provider HTTP beyond the documented `2026-03-19` artist sync snapshot
+- любые claims о production readiness beyond the verified local, staging-like, and documented production-like artist-sync snapshots
+
+### First-User Access Path Boundary
+
+- current first-tester access path: operator-run demo API on a trusted LAN/VPN
+- operator launch shape:
+  - `./scripts/reset_demo_env.sh`
+  - `DEMO_APP_HOST=0.0.0.0 DEMO_ACCESS_HOST=<operator_lan_ip> ./scripts/run_demo_api.sh`
+- tester URL: `http://<operator_lan_ip>:8001/ui`
+- this is an operator runbook, not a deployment target
+- public internet exposure, TLS termination, and app-layer auth remain out of scope for the current MVP launch slice
 
 ## 2. Актуальное дерево репозитория по подсистемам
 
@@ -155,8 +171,8 @@ data/
 | `LinkService` | persist canonical/platform/link rows | used by search and sync flows | relies on provider/entity inputs | implemented |
 | `MatchingService` | matching and explainability scoring | used by search flow | live provider quality not verified | implemented |
 | `SearchService` | cache-first search, provider fan-out, stale handling | live `/search` and cache-backed `/ui` | no-provider degraded path verified; live provider results not fully verified | implemented / partially verified |
-| `SyncService` | enqueue jobs, read job state, execute refresh | live `/sync` and `/jobs`; worker execution path exists | live provider refresh success not verified | implemented / partially verified |
-| `YandexCatalogIngestionService` | ingests Yandex artist/release/track graphs and segmented provider catalog lists | used by Yandex-linked sync execution | live provider HTTP and end-to-end sync readiness are still only partially verified | implemented / partially verified |
+| `SyncService` | enqueue jobs, read job state, execute refresh | live `/sync` and `/jobs`; worker execution path exists | one production-like artist sync snapshot is verified on `2026-03-19`; broader live refresh coverage remains partial | implemented / partially verified |
+| `YandexCatalogIngestionService` | ingests Yandex artist/release/track graphs and segmented provider catalog lists | used by Yandex-linked sync execution | documented production-like artist sync snapshot is green; broader live-provider coverage remains partial | implemented / partially verified |
 
 ## 8. Таблица provider layer
 
@@ -168,7 +184,7 @@ data/
 | `ProviderRegistry` | `app.providers.registry.ProviderRegistry` | runtime lookup/iteration works | fully implemented |
 | `YouTubeMusicClient.search()` | concrete HTTP search client | code exists, but live-token behavior is not verified for baseline claims | partial / unverified live behavior |
 | `YandexMusicClient.search()` | concrete HTTP search client | code exists, but live-token behavior is not verified for baseline claims | partial / unverified live behavior |
-| `YouTubeMusicClient.get_*()` | concrete methods present | all detail refresh methods still raise `NotImplementedError` | stub |
+| `YouTubeMusicClient.get_*()` | concrete detail fetch methods | implemented with targeted automated coverage; the `2026-03-19` production-like artist sync snapshot exercised the refresh path | implemented / partially verified live behavior |
 | `YandexMusicClient.get_*()` | concrete detail fetch methods | used by Yandex catalog ingestion and sync refresh wiring; live behavior is still only partially verified | implemented / partially verified live behavior |
 | YouTube mapper layer | `map_artist`, `map_release`, `map_track` | mapper layer is implemented and tested | implemented |
 | Yandex mapper layer | `map_artist`, `map_release`, `map_track` | mapper layer is implemented and tested | implemented |
@@ -207,7 +223,7 @@ data/
 1. `GET /jobs/{job_id}` returns stored sync job state.
 2. Existing jobs may be `queued`, `running`, `finished`, or `failed`.
 3. Unknown IDs return `404 not_found`.
-4. Worker execution exists, but successful live provider refresh is not a verified baseline claim because only parts of provider refresh have been exercised end-to-end and YouTube detail refresh still remains stubbed.
+4. Worker execution exists, and one `2026-03-19` production-like artist sync run reached `finished` with both providers `status="updated"` and `partial=false`; broader live refresh coverage remains partial.
 
 ## 10. Что реально делает queue / worker
 
@@ -217,7 +233,7 @@ data/
 | --- | --- | --- | --- |
 | `app/tasks/queue.py` | создает Redis connection, `Queue(name)` и enqueue для sync jobs | Redis must be reachable | implemented |
 | `app/tasks/worker.py` | поднимает стандартный RQ worker | отдельный процесс, не часть `run_api.sh` | implemented |
-| `app/tasks/sync_jobs.run_sync_job` | открывает DB session, строит `SyncService`, запускает `execute(job_id)` | упирается в unverified provider refresh path | partial |
+| `app/tasks/sync_jobs.run_sync_job` | открывает DB session, строит `SyncService`, запускает `execute(job_id)` | documented artist-sync refresh snapshot is verified; broader provider refresh coverage remains partial | partial |
 | `app/tasks/search_jobs.refresh_search_cache` | search refresh worker path | implementation remains stubbed | stub |
 
 ## 11. Список env-переменных и какие из них обязательны
@@ -303,14 +319,13 @@ Current local verification snapshot on `2026-03-19`:
 ### Partially Verified For Baseline
 
 - `SearchService` live provider fan-out path
-- `SyncService.execute()` live provider refresh path
+- `SyncService.execute()` live provider refresh path beyond the documented `2026-03-19` artist sync snapshot
 - web UI success paths that require pre-existing canonical data
-- queue-backed sync execution beyond enqueue/job-status semantics
-- Yandex live provider behavior beyond the current branch snapshot
+- queue-backed sync execution beyond the documented artist sync snapshot
+- Yandex live provider behavior beyond the documented artist sync snapshot
 
 ### Stub / Placeholder
 
-- provider detail refresh methods `YouTubeMusicClient.get_*()`
 - `app/tasks/search_jobs.refresh_search_cache`
 
 ## 15. Что реально подключено в runtime versus что пока ограничено baseline
@@ -322,12 +337,12 @@ Current local verification snapshot on `2026-03-19`:
 | Health API | да | verified success path |
 | Search API | да | rate limiting is verified; `503 search_providers_unavailable` now depends on an effectively empty provider registry, while default branch wiring usually still has Yandex search |
 | Entity detail API | да | success path requires existing canonical data |
-| Sync API | да | enqueue/status supported; live provider refresh unverified |
+| Sync API | да | enqueue/status supported; one production-like artist sync run is verified, broader live refresh coverage remains partial |
 | Jobs API | да | depends on existing jobs |
 | Web UI | да | empty-results HTML is current branch baseline; provider-disabled notice is only a fallback when the effective provider registry is empty |
 | Worker process | отдельно запускается | not required for the docs-only baseline |
 | Search refresh job | code path exists | worker implementation remains stubbed |
-| Live provider refresh | limited | YouTube `get_*()` remains unimplemented, and broader end-to-end live refresh is still not fully verified |
+| Live provider refresh | limited | documented `2026-03-19` artist sync snapshot is verified; broader end-to-end live refresh is still not fully verified |
 
 ## 16. Расхождения между старой документацией и текущим кодом
 
@@ -336,4 +351,4 @@ Current local verification snapshot on `2026-03-19`:
 - Старый README описывал репозиторий как foundation skeleton с одним `/health`; это больше не соответствует текущему runtime wiring.
 - Старый brief описывал search/detail/sync/jobs/web как dormant or not wired; сейчас они реально смонтированы.
 - Current baseline story is now standardized around verified local and staging-like behavior, including acceptable degraded states.
-- Документация больше не обещает live provider behavior, который не был отдельно подтвержден.
+- Документация теперь отделяет newer verified state on `2026-03-19` from broader live-provider claims that remain only partially verified.

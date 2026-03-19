@@ -2,6 +2,120 @@
 
 Этот artifact фиксирует verified baseline, на который опираются `README.md`, `docs/project_brief.md`, и demo runbook по состоянию на `2026-03-16`.
 
+## Newer Search-First Certification On `2026-03-19`
+
+Этот append-only раздел фиксирует более свежий search-first runtime snapshot после устранения гонки на provider-row persistence в текущем WIP.
+
+### Commands Actually Run
+
+```bash
+./scripts/reset_demo_env.sh
+```
+
+```bash
+./scripts/run_demo_api.sh
+```
+
+```bash
+curl -i http://127.0.0.1:8001/health
+```
+
+```bash
+curl -i 'http://127.0.0.1:8001/search?q=Motorama&kind=artist&limit=5'
+curl -i 'http://127.0.0.1:8001/ui?q=Motorama&kind=artist&limit=5'
+```
+
+```bash
+curl -i 'http://127.0.0.1:8001/search?q=Motorama&kind=artist&limit=5'
+curl -i 'http://127.0.0.1:8001/ui?q=Motorama&kind=artist&limit=5'
+```
+
+```bash
+curl -i 'http://127.0.0.1:8001/search?q=Krovostok&kind=artist&limit=5'
+curl -i 'http://127.0.0.1:8001/ui?q=Krovostok&kind=artist&limit=5'
+```
+
+```bash
+curl -i 'http://127.0.0.1:8001/search?q=Krovostok&kind=artist&limit=5'
+curl -i 'http://127.0.0.1:8001/ui?q=Krovostok&kind=artist&limit=5'
+```
+
+### Exact Observations
+
+- `GET /health` returned `200` with `status=ok`, `database.status=ok`, and `redis.status=ok`
+- parallel cold-start `Motorama` probes both returned `200`
+  - `/search?q=Motorama&kind=artist&limit=5` returned `cache.status="miss"`
+  - `/ui?q=Motorama&kind=artist&limit=5` returned `200` and rendered the primary artist CTA
+  - server log showed only `200 OK` lines and no `IntegrityError`
+- warm `Motorama` probes both returned `200`
+  - `/search` returned `cache.status="fresh"`
+  - top `canonical_id` stayed `1`
+  - `/ui` stayed `200`
+- cold `Krovostok` probes both returned `200`
+  - `/search?q=Krovostok&kind=artist&limit=5` returned `cache.status="miss"`
+  - top `canonical_id` was `4`
+  - `/ui?q=Krovostok&kind=artist&limit=5` returned `200`
+- warm `Krovostok` probes both returned `200`
+  - `/search` returned `cache.status="fresh"`
+  - top `canonical_id` stayed `4`
+  - `/ui` stayed `200`
+
+### Claim Boundary
+
+- current certified search-first query set: `Motorama`, `Krovostok`
+- certification covers clean reset, app startup, `/health`, `/search`, and `/ui`
+- this does not certify worker-backed sync, jobs UX, or general live-provider readiness
+- `Krovostok` currently renders a primary CTA label `Krovostok - Topic`, so demo claims must remain ambiguity-aware and query-specific
+
+## Private-Network Access Smoke On `2026-03-19`
+
+Этот append-only раздел фиксирует минимальный launcher/runbook smoke для первого tester-access path.
+
+### Commands Actually Run
+
+```bash
+sh -n scripts/run_demo_api.sh
+```
+
+```bash
+./scripts/reset_demo_env.sh
+```
+
+```bash
+DEMO_APP_HOST=0.0.0.0 DEMO_ACCESS_HOST=192.168.1.23 ./scripts/run_demo_api.sh
+```
+
+```bash
+curl -i http://127.0.0.1:8001/health
+```
+
+```bash
+curl -i 'http://127.0.0.1:8001/ui?q=Motorama&kind=artist&limit=5'
+```
+
+```bash
+curl -i 'http://127.0.0.1:8001/ui?q=Krovostok&kind=artist&limit=5'
+```
+
+### Exact Observations
+
+- shell syntax check for `scripts/run_demo_api.sh` passed
+- clean demo reset succeeded before the shared-bind smoke
+- shared-mode launcher printed:
+  - bind URL `http://0.0.0.0:8001/ui`
+  - sample shareable tester URL `http://192.168.1.23:8001/ui` from `DEMO_ACCESS_HOST`
+  - trusted-private-network warning for non-loopback binding
+- `GET /health` returned `200` on `127.0.0.1:8001`
+- `GET /ui?q=Motorama&kind=artist&limit=5` returned `200`
+- `GET /ui?q=Krovostok&kind=artist&limit=5` returned `200`
+- second-device browser access was not executable from this sandbox and remains a manual operator smoke step
+
+### Claim Boundary
+
+- this smoke certifies the local shared-bind launcher path and the novice runbook shape
+- this does not certify public internet exposure, TLS, auth, or any new deployment target
+- the actual operator LAN/VPN IP must still be discovered on the operator machine at run time
+
 Ключевая граница:
 
 - verified local baseline включает точные команды, route probe, temp-SQLite smoke, rate-limit checks и redaction smoke

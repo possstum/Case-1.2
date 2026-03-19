@@ -2,7 +2,7 @@
 
 NETvRF is a FastAPI MVP for cross-platform music search, canonical entity detail pages, and queued sync jobs across YouTube Music and Yandex Music.
 
-As of `2026-03-16`, the verified demo baseline includes mounted API and web UI routes, local SQLite WAL development, and a staging-like host-run setup against Dockerized PostgreSQL and Redis. Live provider behavior with real tokens is still not verified and must not be presented as a completed capability.
+As of `2026-03-19`, the verified demo baseline includes mounted API and web UI routes, local SQLite WAL development, a staging-like host-run setup against Dockerized PostgreSQL and Redis, and a separately verified production-like artist sync path with real provider tokens. Broader live provider behavior is still only partially verified and must not be presented as a blanket completed capability.
 
 ## Stack
 
@@ -25,13 +25,92 @@ As of `2026-03-16`, the verified demo baseline includes mounted API and web UI r
   - log redaction masks `Authorization`, `Cookie`, and token-like values
 - Verified staging-like behavior with blank provider tokens:
   - `/health` returns `200` with database and Redis both `ok`
-  - `/search` returns `503 search_providers_unavailable` on cold miss
+  - `/search` keeps the documented degraded path when the effective provider registry is empty; current default wiring may still return `200` through public Yandex search on a cold miss
+- Verified search-first clean-demo behavior on `2026-03-19` with real provider tokens:
+  - `./scripts/reset_demo_env.sh` and `./scripts/run_demo_api.sh` produced a clean `8001` demo environment
+  - parallel cold-start `Motorama` `/search` and `/ui` both returned `200` after the provider-row race fix
+  - `Motorama` and `Krovostok` both stayed stable on cold and warm `/search` and `/ui`
+- Separately verified production-like artist sync behavior with real provider tokens on `2026-03-19`:
+  - `/jobs/{job_id}` reached `finished`
+  - both providers returned `status="updated"`
+  - YouTube used `mode="entity_refresh"`
+  - Yandex used `mode="catalog_ingest"`
+  - `partial=false`
+  - post-sync `/artists/{id}` kept non-empty `yandex_catalog_sections`
+  - post-sync `/ui/artists/{id}` still showed `Yandex native catalog`
 - Not verified for demo claims:
-  - live provider search quality with real tokens
-  - provider `get_*()` refresh paths used by sync execution
-  - successful end-to-end live provider refresh via worker
+  - live provider search quality with real tokens across arbitrary queries
+  - broader live provider behavior beyond the documented `2026-03-19` artist sync snapshot
+
+## First-User MVP Scope
+
+- Certified query set: `Motorama`, `Krovostok`
+- Certified flow: `GET /health` -> `/ui` -> artist search on the two certified queries
+- Chosen first-tester access path: operator-run demo API on a trusted LAN/VPN
+  - operator shares `http://<operator_lan_ip>:8001/ui`
+  - no public internet exposure, TLS, or auth layer is part of this MVP milestone
+- Recommended clean-demo commands:
+
+```bash
+./scripts/reset_demo_env.sh
+./scripts/run_demo_api.sh
+```
+
+- First-user MVP excludes:
+  - `/sync`
+  - `/jobs`
+  - worker-backed refresh claims
+  - broad live-provider quality claims
+- Presentation note for `Krovostok`:
+  - the current primary CTA label renders `Krovostok - Topic`, so present it as an ambiguity-aware artist overview path, not as a blanket proof of perfect top-label quality
 
 ## Demo Runbook
+
+### Private-Network First-Tester Runbook
+
+Use this runbook only for trusted testers on the same LAN or VPN as the operator.
+
+1. Reset the isolated demo environment:
+
+```bash
+./scripts/reset_demo_env.sh
+```
+
+2. Discover the operator LAN IP on macOS:
+
+```bash
+OPERATOR_LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)"
+echo "$OPERATOR_LAN_IP"
+```
+
+If both commands return nothing, use the machine's current LAN/VPN IP from system settings.
+
+3. Start the demo API in shared mode:
+
+```bash
+DEMO_APP_HOST=0.0.0.0 DEMO_ACCESS_HOST="$OPERATOR_LAN_IP" ./scripts/run_demo_api.sh
+```
+
+4. Verify locally on the operator machine:
+
+```bash
+curl -i http://127.0.0.1:8001/health
+curl -i 'http://127.0.0.1:8001/ui?q=Motorama&kind=artist&limit=5'
+curl -i 'http://127.0.0.1:8001/ui?q=Krovostok&kind=artist&limit=5'
+```
+
+5. Send testers exactly one URL:
+
+```text
+http://<operator_lan_ip>:8001/ui
+```
+
+6. Ask testers to run only `Motorama` and `Krovostok`.
+7. Treat success as:
+  - `/ui` opens for the tester
+  - both certified queries render
+  - the old duplicate-row `500` does not recur
+8. If the path fails, stop and fall back to operator-only demo. Do not improvise a public deploy in this milestone.
 
 ### Dev Start
 
@@ -105,10 +184,12 @@ curl -i http://127.0.0.1:8000/jobs/<job_id>
 
 ## Known Limitations
 
-- Live provider behavior with real `YOUTUBE_MUSIC_TOKEN` and `YANDEX_MUSIC_TOKEN` is not part of the verified demo baseline.
-- Provider detail refresh paths (`get_artist`, `get_release`, `get_track`) are not verified for demo claims.
+- Broader live provider behavior with real `YOUTUBE_MUSIC_TOKEN` and `YANDEX_MUSIC_TOKEN` is not part of the general verified demo baseline beyond the documented `2026-03-19` artist sync snapshot.
+- Provider detail refresh paths (`get_artist`, `get_release`, `get_track`) are implemented and were exercised in the `2026-03-19` production-like artist sync snapshot, but broader live-provider coverage remains partial.
 - Successful detail, sync, and job success-path demos depend on pre-existing canonical rows or known IDs in the active database.
-- Search cache refresh and worker-based sync execution exist in code, but live-provider success claims remain out of scope for this docs pass.
+- Search cache refresh remains out of scope, and worker-based sync execution has one documented green production-like artist sync result rather than a blanket readiness claim.
+- `Krovostok` is certified as a stable query, but its current primary CTA label is `Krovostok - Topic`; keep user-testing claims query-specific and ambiguity-aware.
+- The first-tester access path is private-network only. This repository still does not provide a public deployment target, TLS termination, or application-layer auth for open internet exposure.
 
 ## Backup / Restore Smoke Checklist
 
