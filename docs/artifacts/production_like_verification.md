@@ -1,6 +1,24 @@
 # Production-Like Verification: Frontend Artist MVP Phase 2 Milestone 4 Yandex 403 Fix
 
-Status: passed on `2026-03-19`.
+Status: historical milestone body passed on `2026-03-19`; newer exact-branch addendum recorded on `2026-03-23`.
+
+## Latest Exact-Branch State On `2026-03-23`
+
+Latest production-like claims for the current release-hardening branch now come from [exact_branch_verification_2026_03_20.md](/Users/possstum/Documents/WorkID2/docs/artifacts/exact_branch_verification_2026_03_20.md), which verified:
+
+- `Krovostok` live search -> `POST /sync/artist/4` -> `/jobs/b59ab5f2-c3f6-4a63-aeb5-500e2acc696e` -> post-sync artist/API UI checks
+- `Motorama` live search -> `POST /sync/artist/2` -> `/jobs/0a8eb713-e1dc-4885-8a5d-83c8a576c2d4` -> post-sync artist/API UI checks
+- both terminal job payloads reached `status="finished"`
+- both terminal job payloads kept `partial=false`
+- both certified artists reported YouTube `status="updated"` with `mode="entity_refresh"`
+- both certified artists reported Yandex `status="updated"` with `mode="catalog_ingest"`
+- post-sync `/artists/{id}` still had non-empty `yandex_catalog_sections`
+- post-sync `/ui/artists/{id}` still rendered the Yandex catalog and missing-on-Yandex headings
+
+Historical note:
+
+- the append-only milestone body below remains valid evidence for the original `2026-03-19` Yandex 403 fix
+- the `2026-03-23` exact-branch addendum narrows newer release claims to the two exact certified artists above
 
 ## Newer Verified State On `2026-03-19`
 
