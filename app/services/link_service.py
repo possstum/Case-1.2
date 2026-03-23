@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from collections.abc import Callable
+from typing import Any, Optional, TypeVar
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -18,6 +20,8 @@ from app.db.models import (
 )
 from app.db.models.mixins import utcnow
 from app.providers.base import ProviderArtist, ProviderEntity, ProviderRelease, ProviderTrack
+
+PlatformRowT = TypeVar("PlatformRowT", PlatformArtist, PlatformRelease, PlatformTrack)
 
 
 class LinkService:
@@ -121,18 +125,18 @@ class LinkService:
             PlatformArtist.platform == entity.provider.value,
             PlatformArtist.platform_id == entity.provider_id,
         )
-        row = self.session.scalar(statement)
-        if row is None:
-            row = PlatformArtist(
+        row, created = self._get_or_create_platform_row(
+            statement=statement,
+            factory=lambda: PlatformArtist(
                 platform=entity.provider.value,
                 platform_id=entity.provider_id,
                 display_name=entity.name,
                 display_norm=entity.display_norm,
                 match_norm=entity.match_norm,
                 raw_json=entity.raw_json,
-            )
-            self.session.add(row)
-        else:
+            ),
+        )
+        if not created:
             row.display_name = entity.name
             row.display_norm = entity.display_norm
             row.match_norm = entity.match_norm
@@ -146,9 +150,9 @@ class LinkService:
             PlatformRelease.platform == entity.provider.value,
             PlatformRelease.platform_id == entity.provider_id,
         )
-        row = self.session.scalar(statement)
-        if row is None:
-            row = PlatformRelease(
+        row, created = self._get_or_create_platform_row(
+            statement=statement,
+            factory=lambda: PlatformRelease(
                 platform=entity.provider.value,
                 platform_id=entity.provider_id,
                 title=entity.title,
@@ -158,9 +162,9 @@ class LinkService:
                 release_year=entity.release_year,
                 version_tags_json=entity.version_tags_json,
                 raw_json=entity.raw_json,
-            )
-            self.session.add(row)
-        else:
+            ),
+        )
+        if not created:
             row.title = entity.title
             row.display_norm = entity.display_norm
             row.match_norm = entity.match_norm
@@ -177,9 +181,9 @@ class LinkService:
             PlatformTrack.platform == entity.provider.value,
             PlatformTrack.platform_id == entity.provider_id,
         )
-        row = self.session.scalar(statement)
-        if row is None:
-            row = PlatformTrack(
+        row, created = self._get_or_create_platform_row(
+            statement=statement,
+            factory=lambda: PlatformTrack(
                 platform=entity.provider.value,
                 platform_id=entity.provider_id,
                 title=entity.title,
@@ -188,9 +192,9 @@ class LinkService:
                 duration_ms=entity.duration_ms,
                 version_tags_json=entity.version_tags_json,
                 raw_json=entity.raw_json,
-            )
-            self.session.add(row)
-        else:
+            ),
+        )
+        if not created:
             row.title = entity.title
             row.display_norm = entity.display_norm
             row.match_norm = entity.match_norm
@@ -200,6 +204,29 @@ class LinkService:
             row.fetched_at = utcnow()
         self.session.flush()
         return row
+
+    def _get_or_create_platform_row(
+        self,
+        *,
+        statement,
+        factory: Callable[[], PlatformRowT],
+    ) -> tuple[PlatformRowT, bool]:
+        row = self.session.scalar(statement)
+        if row is not None:
+            return row, False
+
+        try:
+            with self.session.begin_nested():
+                row = factory()
+                self.session.add(row)
+                self.session.flush()
+        except IntegrityError:
+            row = self.session.scalar(statement)
+            if row is None:
+                raise
+            return row, False
+
+        return row, True
 
     def _upsert_link(
         self,

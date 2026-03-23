@@ -61,7 +61,7 @@ class Settings(BaseSettings):
         validation_alias="SEARCH_DEFAULT_LIMIT",
     )
     search_max_limit: int = Field(
-        default=10,
+        default=250,
         validation_alias="SEARCH_MAX_LIMIT",
     )
     search_cache_stale_seconds: int = Field(

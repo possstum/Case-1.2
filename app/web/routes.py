@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -14,11 +14,13 @@ from app.api.deps import (
     get_sync_service,
     get_track_service,
 )
+from app.core.errors import ServiceUnavailableError
 from app.services.artist_service import ArtistService
 from app.services.release_service import ReleaseService
 from app.services.search_service import SearchService
 from app.services.sync_service import SyncService
 from app.services.track_service import TrackService
+from app.web.presenters import build_search_page_view, requested_kinds_for_tab, resolve_search_tab
 from app.web.render import (
     render_artist_page,
     render_job_page,
@@ -28,6 +30,8 @@ from app.web.render import (
 )
 
 web_router = APIRouter(include_in_schema=False)
+UiSearchKind = Literal["", "artist", "release", "track"]
+UiSearchTab = Literal["all", "artist", "release", "track", "missing"]
 
 
 @web_router.get("/", response_class=RedirectResponse)
@@ -38,24 +42,32 @@ def root_redirect() -> RedirectResponse:
 @web_router.get("/ui", response_class=HTMLResponse, dependencies=[Depends(enforce_search_rate_limit)])
 def ui_search(
     q: Optional[str] = Query(default=None, min_length=1),
-    kind: Optional[str] = Query(default=None, pattern="^(artist|release|track)$"),
+    tab: Optional[UiSearchTab] = Query(default=None),
+    kind: Optional[UiSearchKind] = Query(default=None),
     limit: Optional[int] = Query(default=None, ge=1),
-    search_service: Optional[SearchService] = Depends(get_web_search_service),
+    search_service: SearchService = Depends(get_web_search_service),
 ) -> HTMLResponse:
-    response = None
+    normalized_kind = kind or None
+    active_tab = resolve_search_tab(tab, normalized_kind)
+    responses_by_kind = {}
     notice = None
     if q:
-        if search_service is None:
-            notice = "Search providers are not configured. The UI is available, but live search is disabled."
-        else:
-            response = search_service.search(query=q, kind=kind, limit=limit)
+        try:
+            for requested_kind in requested_kinds_for_tab(active_tab):
+                responses_by_kind[requested_kind] = search_service.search(query=q, kind=requested_kind, limit=limit)
+        except ServiceUnavailableError:
+            notice = "Поиск сейчас недоступен: live providers не настроены или временно выключены."
+    page = build_search_page_view(
+        query=q or "",
+        active_tab=active_tab,
+        limit=limit,
+        responses_by_kind=responses_by_kind,
+        provider_notice=notice,
+    )
     return HTMLResponse(
         render_search_page(
-            query=q or "",
-            kind=kind,
+            page=page,
             limit=limit,
-            response=response,
-            notice=notice,
         )
     )
 

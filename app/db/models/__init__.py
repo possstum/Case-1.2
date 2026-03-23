@@ -12,9 +12,13 @@ from app.db.models.jobs import SyncJob
 from app.db.models.links import LinkArtist, LinkRelease, LinkTrack
 from app.db.models.platform import (
     PlatformArtist,
+    PlatformCatalogList,
+    PlatformCatalogListItem,
     PlatformRelease,
+    PlatformReleaseArtist,
     PlatformReleaseTrack,
     PlatformTrack,
+    PlatformTrackArtist,
 )
 
 __all__ = [
@@ -26,9 +30,13 @@ __all__ = [
     "Track",
     "TrackArtist",
     "PlatformArtist",
+    "PlatformCatalogList",
+    "PlatformCatalogListItem",
     "PlatformRelease",
+    "PlatformReleaseArtist",
     "PlatformReleaseTrack",
     "PlatformTrack",
+    "PlatformTrackArtist",
     "LinkArtist",
     "LinkRelease",
     "LinkTrack",

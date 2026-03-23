@@ -4,6 +4,7 @@ from typing import Optional
 
 from fastapi.testclient import TestClient
 
+from app.demo.data import seed_demo_catalog
 from app.api.deps import (
     get_health_service,
     get_optional_provider_registry,
@@ -12,17 +13,6 @@ from app.api.deps import (
     get_sync_rate_limiter,
     get_sync_job_scheduler,
 )
-from app.db.models import (
-    LinkArtist,
-    LinkRelease,
-    LinkTrack,
-    PlatformArtist,
-    PlatformRelease,
-    PlatformTrack,
-)
-from app.db.repositories.artists import ArtistRepository
-from app.db.repositories.releases import ReleaseRepository
-from app.db.repositories.tracks import TrackRepository
 from app.main import create_app
 from app.providers import (
     MusicProvider,
@@ -125,7 +115,7 @@ class StubProvider(MusicProvider):
         self,
         query: str,
         *,
-        limit: int,
+        limit: int | None,
         kind: Optional[ProviderEntityKind] = None,
     ) -> ProviderSearchResult:
         if self.search_error is not None:
@@ -133,7 +123,7 @@ class StubProvider(MusicProvider):
         items = self.search_hits
         if kind is not None:
             items = [item for item in items if item.kind == kind]
-        return ProviderSearchResult(query=query, items=items[:limit])
+        return ProviderSearchResult(query=query, items=items if limit is None else items[:limit])
 
     def get_artist(self, provider_id: str) -> ProviderArtist:
         if self.get_error is not None:
@@ -190,147 +180,15 @@ def create_test_client(
     return TestClient(application)
 
 
-def seed_catalog(session) -> dict[str, int]:
-    artist_repository = ArtistRepository(session)
-    release_repository = ReleaseRepository(session)
-    track_repository = TrackRepository(session)
-
-    artist = artist_repository.create(
-        display_name="Krovostok",
-        display_norm=display_norm("Krovostok"),
-        match_norm=match_norm("Krovostok"),
-        aliases=[
-            {
-                "alias": "Кровосток",
-                "display_norm": display_norm("Кровосток"),
-                "match_norm": match_norm("Кровосток"),
-                "source": "seed",
-            }
-        ],
+def seed_catalog(session, *, include_yandex_catalog_sections: bool = False) -> dict[str, int]:
+    state = seed_demo_catalog(
+        session,
+        include_yandex_catalog_sections=include_yandex_catalog_sections,
     )
-    release = release_repository.create(
-        title="Studio Session",
-        display_norm=display_norm("Studio Session"),
-        match_norm=match_norm("Studio Session"),
-        release_type="album",
-        release_year=2024,
-    )
-    track = track_repository.create(
-        title="Biography",
-        display_norm=display_norm("Biography"),
-        match_norm=match_norm("Biography"),
-        duration_ms=185000,
-    )
-    release_repository.add_artist(release=release, artist=artist)
-    track_repository.add_artist(track=track, artist=artist)
-    release_repository.add_track(release=release, track=track, position=1, disc_number=1, track_number=1)
-
-    platform_artist_youtube = PlatformArtist(
-        platform="youtube",
-        platform_id="yt-artist-1",
-        display_name="Кровосток",
-        display_norm=display_norm("Кровосток"),
-        match_norm=match_norm("Кровосток"),
-        raw_json={"url": "https://music.youtube.test/artist/yt-artist-1"},
-    )
-    platform_artist_yandex = PlatformArtist(
-        platform="yandex",
-        platform_id="ya-artist-1",
-        display_name="Krovostok",
-        display_norm=display_norm("Krovostok"),
-        match_norm=match_norm("Krovostok"),
-        raw_json={"url": "https://music.yandex.test/artist/ya-artist-1"},
-    )
-    platform_release_youtube = PlatformRelease(
-        platform="youtube",
-        platform_id="yt-release-1",
-        title="Studio Session",
-        display_norm=display_norm("Studio Session"),
-        match_norm=match_norm("Studio Session"),
-        release_type="album",
-        release_year=2024,
-        raw_json={
-            "artist_names": ["Krovostok"],
-            "track_count": 1,
-            "url": "https://music.youtube.test/release/yt-release-1",
-        },
-    )
-    platform_track_youtube = PlatformTrack(
-        platform="youtube",
-        platform_id="yt-track-1",
-        title="Biography",
-        display_norm=display_norm("Biography"),
-        match_norm=match_norm("Biography"),
-        duration_ms=185000,
-        raw_json={
-            "artist_names": ["Krovostok"],
-            "url": "https://music.youtube.test/track/yt-track-1",
-        },
-    )
-    platform_track_yandex = PlatformTrack(
-        platform="yandex",
-        platform_id="ya-track-1",
-        title="Biography",
-        display_norm=display_norm("Biography"),
-        match_norm=match_norm("Biography"),
-        duration_ms=185000,
-        raw_json={
-            "artist_names": ["Krovostok"],
-            "url": "https://music.yandex.test/track/ya-track-1",
-        },
-    )
-    session.add_all(
-        [
-            platform_artist_youtube,
-            platform_artist_yandex,
-            platform_release_youtube,
-            platform_track_youtube,
-            platform_track_yandex,
-        ]
-    )
-    session.flush()
-    session.add_all(
-        [
-            LinkArtist(
-                artist_id=artist.id,
-                platform_artist_id=platform_artist_youtube.id,
-                decision="auto",
-                score=0.99,
-                features_json={"name_similarity": 1.0},
-            ),
-            LinkArtist(
-                artist_id=artist.id,
-                platform_artist_id=platform_artist_yandex.id,
-                decision="auto",
-                score=0.99,
-                features_json={"name_similarity": 0.98},
-            ),
-            LinkRelease(
-                release_id=release.id,
-                platform_release_id=platform_release_youtube.id,
-                decision="ambiguous",
-                score=0.72,
-                features_json={"title_similarity": 0.9, "year_delta": 0},
-            ),
-            LinkTrack(
-                track_id=track.id,
-                platform_track_id=platform_track_youtube.id,
-                decision="auto",
-                score=0.94,
-                features_json={"duration_delta_ms": 0},
-            ),
-            LinkTrack(
-                track_id=track.id,
-                platform_track_id=platform_track_yandex.id,
-                decision="auto",
-                score=0.94,
-                features_json={"duration_delta_ms": 0},
-            ),
-        ]
-    )
-    session.commit()
     return {
-        "artist_id": artist.id,
-        "release_id": release.id,
-        "track_id": track.id,
+        "artist_id": state.artist_id,
+        "release_id": state.release_id,
+        "track_id": state.track_id,
+        "candidate_release_id": state.candidate_release_id,
+        "missing_release_id": state.missing_release_id,
     }
