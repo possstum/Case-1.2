@@ -1,6 +1,6 @@
 # Implementation Plan: Branch Push And GitHub PR
 
-Status: drafted on `2026-03-23`.
+Status: completed on `2026-03-23`.
 
 ## Summary
 
@@ -107,3 +107,9 @@ Tests:
 - remote branch is updated
 - draft PR exists on GitHub
 - walkthrough artifact records changed files, commands, and test status for the milestone
+
+## Outcome
+
+- local commit created: `9e3a8d4 Add release hardening stage 1 demo readiness`
+- branch pushed to `origin/yandex-catalog-ingest-pr`
+- draft PR created: `https://github.com/possstum/Case-1.2/pull/1`

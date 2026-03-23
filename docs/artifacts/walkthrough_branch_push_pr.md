@@ -1,6 +1,6 @@
 # Walkthrough: Branch Push And GitHub PR
 
-Status: recorded on `2026-03-23`.
+Status: completed on `2026-03-23`.
 
 ## Goal
 
@@ -68,11 +68,73 @@ Milestone result:
 - planning completed
 - git/github delivery blocked until GitHub CLI is installed
 
+### Milestone 1: Branch Delivery And PR
+
+Changed files:
+
+- `app/demo/__init__.py`
+- `app/demo/data.py`
+- `app/demo/seed.py`
+- `docs/artifacts/exact_branch_verification_2026_03_20.md`
+- `docs/artifacts/implementation_plan_branch_push_pr.md`
+- `docs/artifacts/implementation_plan_release_hardening_stage_1.md`
+- `docs/artifacts/pr_release_hardening_stage_1.md`
+- `docs/artifacts/production_like_verification.md`
+- `docs/artifacts/project_stage_status.md`
+- `docs/artifacts/walkthrough_branch_push_pr.md`
+- `docs/artifacts/walkthrough_release_hardening_stage_1.md`
+- `scripts/reset_seeded_demo_env.sh`
+- `scripts/run_demo_worker.sh`
+- `tests/demo/test_seed.py`
+- `tests/test_support.py`
+
+Commands run:
+
+- `git status --short --branch`
+- `git diff --stat`
+- `git ls-files --others --exclude-standard`
+- `git diff -- docs/artifacts/production_like_verification.md docs/artifacts/project_stage_status.md tests/test_support.py`
+- `sed -n '1,220p' app/demo/data.py`
+- `sed -n '1,260p' app/demo/seed.py`
+- `sed -n '1,220p' tests/demo/test_seed.py`
+- `sed -n '1,220p' scripts/reset_seeded_demo_env.sh`
+- `sed -n '1,220p' scripts/run_demo_worker.sh`
+- `sed -n '1,240p' docs/artifacts/implementation_plan_release_hardening_stage_1.md`
+- `sed -n '1,260p' docs/artifacts/walkthrough_release_hardening_stage_1.md`
+- `sed -n '1,260p' docs/artifacts/exact_branch_verification_2026_03_20.md`
+- `git add -A`
+- `git commit -m "Add release hardening stage 1 demo readiness"`
+- `git push -u origin yandex-catalog-ingest-pr`
+- `/Users/possstum/bin/gh pr list --head yandex-catalog-ingest-pr --state open --json url,number,title`
+- `/Users/possstum/bin/gh pr create --draft --base main --head yandex-catalog-ingest-pr --title "[codex] Add release hardening stage 1 demo readiness" --body-file docs/artifacts/pr_release_hardening_stage_1.md`
+
+Tests run:
+
+- no new tests in the delivery-only milestone
+- delivery reused the already recorded Stage 1 validation from `docs/artifacts/walkthrough_release_hardening_stage_1.md`:
+  - `.venv/bin/ruff check .`
+  - `.venv/bin/pytest -q`
+  - targeted seeded-demo checks
+  - seeded staging-like runtime probes
+  - production-like live worker/sync probes for `Krovostok` and `Motorama`
+
+Observed results:
+
+- GitHub CLI was installed and authenticated as `possstum`
+- local commit created:
+  - `9e3a8d4 Add release hardening stage 1 demo readiness`
+- branch push succeeded:
+  - `origin/yandex-catalog-ingest-pr` advanced from `0e911d2` to `9e3a8d4`
+- no open PR existed before create
+- draft PR was created successfully:
+  - `https://github.com/possstum/Case-1.2/pull/1`
+
+Milestone result:
+
+- completed
+
 ## Current Status
 
 - The required `Implementation Plan` artifact exists.
-- The requested `push + PR` flow has not been executed because the environment does not currently provide `gh`.
-- The next valid step is:
-  - install GitHub CLI
-  - verify auth with `gh auth status`
-  - resume `git add -A`, `git commit`, `git push`, and `gh pr create`
+- The branch is committed and pushed.
+- The draft PR exists on GitHub.
